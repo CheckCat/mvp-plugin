@@ -25,3 +25,9 @@ Build отложен решением оператора на главном г�
 ## Телеметрия
 
 Стадии до build телеметрию не пишут (контракт v2.0: только task_complete в build) — события появятся после smoke.
+
+## Smoke-прогон build (продолжение)
+
+- Task 001 (role devops, `service_path: "."`, первая задача DAG) корректно упал на структурном конфликте DAG-порядка: сгенерированный `ci-mirror.sh` ссылался на `services/` и `services/frontend/`, которых на первой задаче ещё нет — validator дал `VERDICT: park`, диагностика верная, это не баг validator'а.
+- `park()` после этого пытался прогнать repo-wide reset (`git checkout/restore/clean` по boundary `.`) — платформенный safety-классификатор заблокировал команду как разрушительную для всего репозитория реального проекта, relay вернулся без `{line}`, и вместо чистого `stop-and-ask` воркфлоу падал в `halt:error`. Пофикшено: `park()` теперь пропускает reset-relay целиком, если boundary нормализуется в корень репозитория (`.`/`./`/пусто), оставляя working tree как есть для оператора.
+- Маппинг команд в `skills/bootstrap/SKILL.md` шаг 3.2 пофикшен на greenfield-incremental: `mypy services` и все `npm --prefix services/frontend` команды обёрнуты в `if [ -d ... ]` existence-guard, `pytest` терпит exit 5 (no tests collected) — первая задача DAG теперь проходит ci-mirror на пустом дереве.

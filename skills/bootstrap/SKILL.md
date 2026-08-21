@@ -55,19 +55,23 @@ FORBIDDEN_EDGE: <src-pattern> --> <dst-pattern>
 
 **3.2. `ci-mirror.sh`** — детерминированная генерация из `## Stack` brief'а. Читай `backend`/`frontend` ТЕМ ЖЕ способом, что `_extract_stack_value` в `skills/brief/scripts/package-brief.sh` (строки ~166–188: awk по `## Stack`, `- key: value`, case-insensitive key, первое совпадение побеждает) — replicate этот awk один в один для `backend` и для `frontend`, не изобретай новый формат парсинга.
 
-Маппинг стек → команды (пишутся в `.claude/state/ci-mirror.sh`, по одной команде на строку — `validate-task.sh` гоняет их через `bash -e`, первая ошибка обрывает остальные):
+Маппинг стек → команды (пишутся в `.claude/state/ci-mirror.sh`, по одной команде на строку — `validate-task.sh` гоняет их через `bash -e`, первая ошибка обрывает остальные). Команды со скоупом на ещё не существующие каталоги оборачиваются в existence-guard — первая задача DAG обязана проходить ci-mirror на пустом дереве:
 
 | backend | команды |
 |---|---|
-| `fastapi` | `uv sync --frozen` / `uv run ruff check .` / `uv run ruff format --check .` / `uv run mypy services` / `uv run pytest` |
+| `fastapi` | `uv sync --frozen` / `uv run ruff check .` / `uv run ruff format --check .` / `if [ -d services ]; then uv run mypy services; fi` / `uv run pytest \|\| [ $? -eq 5 ]` |
 | `nestjs` | `pnpm install --frozen-lockfile` / `pnpm turbo lint` / `pnpm turbo build` / `pnpm turbo test` |
+
+`uv run pytest \|\| [ $? -eq 5 ]` — exit 5 значит «no tests collected», это ожидаемо на greenfield-дереве и не должно валить ci-mirror; любой другой ненулевой код (реальный failure) по-прежнему валит.
+
+nestjs-блок не оборачивается: `pnpm turbo *` команды идут через workspace-root (`layout=packages`), который существует с первого коммита — там нет скоупа на каталог, создаваемый более поздней задачей.
 
 `frontend` (`react`/`nextjs`) **только когда `backend=fastapi`** — nestjs уже покрывает frontend через тот же pnpm/turbo workspace (`layout=packages`, см. `lib/brief-contract.sh:layout_for_stack`), отдельных команд не нужно:
 
 ```
-npm --prefix services/frontend ci
-npm --prefix services/frontend run lint
-npm --prefix services/frontend run test -- --run
+if [ -d services/frontend ]; then npm --prefix services/frontend ci; fi
+if [ -d services/frontend ]; then npm --prefix services/frontend run lint; fi
+if [ -d services/frontend ]; then npm --prefix services/frontend run test -- --run; fi
 ```
 
 `frontend=none` — не добавляй frontend-команды вообще.
