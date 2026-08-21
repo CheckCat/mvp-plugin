@@ -51,11 +51,18 @@
 #   check 1 fails -> data: null
 #   check 2 fails -> data: {"invariant_violations": [ids]}
 #   check 3 fails or success -> data: {"unapplied":[ids],"counts":{
-#     "critical":N,"medium":N,"low":N,"pending_critical":N,"pending_total":N}}
+#     "critical":N,"medium":N,"low":N,"pending_critical":N,"pending_medium":N,
+#     "pending_low":N,"pending_total":N}}
 #     counts.critical/medium/low are TOTAL records of that severity
-#     regardless of status (audit totals); pending_critical/pending_total
-#     count only status=="pending" records (see state.json section above —
-#     same numbers, also mirrored into state.json).
+#     regardless of status (audit totals); pending_critical/pending_medium/
+#     pending_low/pending_total count only status=="pending" records, broken
+#     down by severity plus the aggregate. pending_medium/pending_low exist
+#     so SKILL.md's Step 5 mode-selection summary can show accurate
+#     per-severity remaining-work counts even on resume (where some records
+#     may already be answered/applied, so the plain totals would overstate
+#     what's left) — only pending_critical/pending_total are mirrored into
+#     state.json (see above); pending_medium/pending_low are stdout-only,
+#     consumed by the skill at Step 5, not persisted.
 
 set -u
 
@@ -88,7 +95,7 @@ fi
 QUEUE="${1:-project_brief/clarify_queue.jsonl}"
 
 if [ ! -f "$QUEUE" ]; then
-  ZERO='{"unapplied":[],"counts":{"critical":0,"medium":0,"low":0,"pending_critical":0,"pending_total":0}}'
+  ZERO='{"unapplied":[],"counts":{"critical":0,"medium":0,"low":0,"pending_critical":0,"pending_medium":0,"pending_low":0,"pending_total":0}}'
   "$state_sh" set pending_critical 0 >/dev/null 2>&1
   "$state_sh" set pending_total 0 >/dev/null 2>&1
   "$state_sh" set auto_closed_critical 0 >/dev/null 2>&1
@@ -146,7 +153,7 @@ if violations:
 
 SEVERITIES = ("critical", "medium", "low")
 counts = {s: 0 for s in SEVERITIES}
-pending_critical = 0
+pending_by_severity = {s: 0 for s in SEVERITIES}
 pending_total = 0
 auto_closed_critical = 0
 unapplied = []
@@ -159,8 +166,8 @@ for r in records:
         counts[sev] += 1
     if status == "pending":
         pending_total += 1
-        if sev == "critical":
-            pending_critical += 1
+        if sev in pending_by_severity:
+            pending_by_severity[sev] += 1
     if status in ("answered_human", "answered_auto"):
         unapplied.append(r.get("id"))
     if sev == "critical" and status in ("answered_auto", "applied") and source == "auto":
@@ -172,7 +179,9 @@ data = {
         "critical": counts["critical"],
         "medium": counts["medium"],
         "low": counts["low"],
-        "pending_critical": pending_critical,
+        "pending_critical": pending_by_severity["critical"],
+        "pending_medium": pending_by_severity["medium"],
+        "pending_low": pending_by_severity["low"],
         "pending_total": pending_total,
     },
 }
@@ -180,7 +189,7 @@ data = {
 with open(aux_out, "w", encoding="utf-8") as f:
     json.dump(
         {
-            "pending_critical": pending_critical,
+            "pending_critical": pending_by_severity["critical"],
             "pending_total": pending_total,
             "auto_closed_critical": auto_closed_critical,
         },

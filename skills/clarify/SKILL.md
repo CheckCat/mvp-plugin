@@ -11,7 +11,7 @@ description: Use after mvp:brief to audit project_brief/ for gaps, contradiction
 
 Каждый результат скрипта — последняя строка stdout, JSON `{"ok","reason","hint","data"}`. При `ok:false` — два исхода: почини по `hint` и повтори, либо Stop&Ask. `state.json` руками не редактируется — только через `state.sh`.
 
-**Разделение труда:** формулировка находок (Pass 1) и refute (Pass 2) — это суждение, ты пишешь `clarify_queue.jsonl` сам через Edit/Write. Но всякий **подсчёт и верификация** (сколько critical, что не applied, инвариант `options[0]===recommended`) — это `scripts/queue-check.sh`, никогда не прикидка в prose. Не пиши в чате «нашёл 5 critical» без вызова скрипта — оператор должен видеть цифры из `data.counts`, не из твоего пересчёта.
+**Разделение труда:** находки (Pass 1) и refute (Pass 2) — суждение, ты пишешь `clarify_queue.jsonl` сам через Edit/Write. Всякий **подсчёт и верификация** (сколько critical, что не applied, инвариант) — только `scripts/queue-check.sh`, никогда прикидка в prose. Оператор видит цифры из `data.counts`, не твой пересчёт в чате.
 
 ## Шаг 1 — гейт
 
@@ -19,7 +19,7 @@ description: Use after mvp:brief to audit project_brief/ for gaps, contradiction
 ${CLAUDE_PLUGIN_ROOT}/lib/gate.sh clarify
 ```
 
-`ok:false` — Stop&Ask с `reason`/`hint` как есть.
+`ok:false` — Stop&Ask с `reason`/`hint`.
 
 ## Шаг 2 — resume-check
 
@@ -27,13 +27,13 @@ ${CLAUDE_PLUGIN_ROOT}/lib/gate.sh clarify
 test -f project_brief/clarify_queue.jsonl
 ```
 
-Очередь уже существует → **резюмируй**: пропусти Шаги 3–4 (аудит и refute уже сделаны и лежат в файле), иди сразу в Шаг 5 с текущими `pending`-записями. **Никакого `--force`/`--restart`** — v2 не поддерживает пересоздание очереди с нуля; если оператор реально хочет начать заново, это ручной `rm` + явное подтверждение через Stop&Ask, не флаг скилла.
+Очередь уже существует → **резюмируй**: пропусти Шаги 3–4 (аудит и refute уже сделаны), иди сразу в Шаг 5. **Никакого `--force`/`--restart`** — v2 не пересоздаёт очередь с нуля флагом; хочет заново — ручной `rm` + Stop&Ask подтверждение.
 
 Очереди нет → `RESUME=0`, иди в Шаг 3.
 
 ## Шаг 3 — аудит brief'а (Pass 1: formulate)
 
-Прочитай `business_logic.md`, `technical_solutions.md`, `glossary.md`/`analysis_grey_zones.md` (если есть). Ищи противоречия, пустые обязательные секции, дыры в бизнес-логике/стеке — три класса находок, как в v1 (inconsistency / business / stack). Для каждой: `2 ≤ len(options) ≤ 4`, `severity` по критерию из `references/refute-prompt.md` (раздел Severity-классификация). Запиши в `project_brief/clarify_queue.jsonl` (схема — `references/queue-schema.md`, load lazily). Все записи на этом шаге: `recommended_v1`/`rationale_v1` заполнены, `recommended`/`self_critique` — ещё пустые, `status: pending`.
+Прочитай `business_logic.md`, `technical_solutions.md`, `glossary.md`/`analysis_grey_zones.md` (если есть). Ищи противоречия, пустые обязательные секции, дыры в бизнес-логике/стеке — три класса находок, как в v1 (inconsistency / business / stack). Для каждой: `2 ≤ len(options) ≤ 4`, `severity` по критерию из `references/refute-prompt.md` (Severity-классификация). Запиши в `project_brief/clarify_queue.jsonl` (схема — `references/queue-schema.md`, load lazily) сразу в форме, где инвариант держится: `options[0] = recommended_v1`, `recommended = recommended_v1`, `rationale = rationale_v1`, `status: pending`. **Ни одна запись не покидает этот шаг с `recommended: null`** — Шаг 4 перезаписывает эти поля результатом refute, но не обязан заполнять их впервые.
 
 Ноль находок — валидный исход. Не выдумывай дыры в полном brief'е.
 
@@ -41,33 +41,42 @@ test -f project_brief/clarify_queue.jsonl
 
 Load `references/refute-prompt.md` и прогони каждую находку через обязательную форму промпта оттуда — **отдельным** проходом рассуждения, не продолжением Шага 3.
 
-- **critical + medium — всегда.**
-- **low — только если позже выбран режим `hard`** (Шаг 5). До выбора режима ты не знаешь, будет ли `hard` — поэтому refute low-находок делай последним, после Шага 5, только если оператор выбрал `hard`. Не трать токены на refute low заранее (см. Red flags).
-- После refute — `recommended`/`rationale`/`self_critique` заполнены; если `verdict: changed`, переставь новый `recommended` в `options[0]` (инвариант, см. `references/queue-schema.md`).
-- Sanity: посчитай `changed_rate` по critical-находкам. `changed_rate == 0` на ≥5 critical → предупреди оператора в сводке Шага 5, что Pass 2, возможно, деградировал в перефраз Pass 1. Не блокер — просто предупреждение.
+- **critical + medium — всегда refute здесь.** Перезапиши `recommended`/`rationale`/`self_critique` реальным вердиктом (`confirmed`/`changed`); при `changed` — переставь новый `recommended` в `options[0]`.
+- **low — refute только если позже выбран режим `hard`** (Шаг 5; режим тут ещё не известен). Пока выставь `self_critique: {"verdict":"skipped","reason":"low severity, mode != hard"}` — `recommended`/`rationale` не трогай, они уже `*_v1` из Шага 3. Выбрали `hard` на Шаге 5 → вернись и прогони настоящий refute по low, перезаписав эту метку (и `options[0]` при `changed`). Не жги токены на low заранее (см. Red flags).
+- Sanity: `changed_rate` по critical. `== 0` на ≥5 critical → предупреди оператора в сводке Шага 5 — Pass 2, возможно, деградировал в перефраз Pass 1. Не блокер.
+
+К концу Шага 4 (и отложенного low-refute при `hard`) у КАЖДОЙ записи `options[0] === recommended` держится по построению — это проверит `queue-check.sh` на Шагах 5 и 8.
 
 ## Шаг 5 — сводка и выбор режима
 
-Покажи оператору находки по severity/категории (цифры — из твоего подсчёта на этом шаге, `queue-check.sh` ещё рано звать — очередь не дописана). Затем **Stop&Ask** через `AskUserQuestion` — режим = кто отвечает:
+Очередь уже полная и согласованная (инвариант — см. Шаг 3/4). Вызови:
+
+```
+${CLAUDE_PLUGIN_ROOT}/skills/clarify/scripts/queue-check.sh
+```
+
+Ожидай `ok:true` (никто ещё не `answered_*`, либо resume — прошлая сессия уже закрыла всё до коммита; `unapplied` в обоих случаях пуст). Покажи оператору `data.counts` как есть — **не пересчитывай в prose**. `critical`/`medium`/`low` — сколько найдено всего; `pending_*` — сколько реально осталось сейчас (корректно и на resume, где часть уже отвечена раньше).
+
+Затем **Stop&Ask** через `AskUserQuestion` — режим = кто отвечает, числа из `pending_*`:
 
 | mode | кто отвечает |
 |---|---|
 | `auto` | никто — все → `answered_auto` с `recommended`. |
-| `light` | оператор отвечает на `critical`. |
-| `medium` | оператор отвечает на `critical` + `medium`. |
-| `hard` | оператор отвечает на всё, включая `low` — сначала прогони refute для low-находок (Шаг 4, отложенная ветка). |
+| `light` | `critical` (`pending_critical` шт.). |
+| `medium` | `critical`+`medium` (`pending_critical`+`pending_medium` шт.). |
+| `hard` | всё, включая `low` (`pending_total` шт.) — сначала refute для low (Шаг 4, отложенная ветка). |
 
 ## Шаг 6 — вопросы оператору (HARD-GATE)
 
-Батчами (3–4 за раз) через `AskUserQuestion`, только записи уровня режима и выше (critical всегда; medium если `medium`/`hard`; low если `hard`). Остальное — `answered_auto` с `answer = options[0]`, `source: auto`.
+Батчами (3–4 за раз) через `AskUserQuestion`, только записи уровня режима и выше (critical всегда; medium если `medium`/`hard`; low если `hard`). Остальное — `status: answered_auto`, `source: auto` (`recommended`/`options` не трогай — уже согласованы Шагом 3/4).
 
-Для отвеченных оператором: `answer = полный label из options[]`, `status: answered_human`, `source: human`. Не объединяй уточнение с `answer` — отдельное поле `operator_note`, если оно понадобится в схеме твоего конкретного проекта.
+В схеме нет отдельного поля `answer` — выбор оператора живёт в `recommended` (см. `references/queue-schema.md`). Для каждой отвеченной записи: запиши выбор в `recommended` (даже если он отличается от значения после refute; свободный ответ вне `options[]` — допиши его текстом в `options[]`), переставь `options[]` так, чтобы `options[0] === recommended`, `rationale` — коротко «operator choice» (+ пояснение, если было), `status: answered_human`, `source: human`.
 
-Это HARD-GATE — не пропускай батч без реального ответа оператора (или явного auto-режима).
+Инвариант держится по построению для каждой терминальной записи — не отдельным полем. Это HARD-GATE — не пропускай батч без реального ответа оператора (или явного auto-режима).
 
 ## Шаг 7 — применение ответов к brief'у
 
-Для каждой `answered_human`/`answered_auto` записи — Edit точечно в нужную секцию `project_brief/*.md` (переопределяет факт → перепиши секцию целиком; уточняет → append с `<!-- clarify <date>: <Q-id> -->` маркером). После записи в brief — переведи статус записи в очереди в `applied`. Делай это для КАЖДОЙ записи сразу после её применения, не пачкой в конце — крэш посередине не должен молча терять факт «ответ применён, но статус не обновлён» (см. Red flags).
+Для каждой `answered_human`/`answered_auto` записи — Edit точечно в нужную секцию `project_brief/*.md` (переопределяет факт → перепиши секцию целиком; уточняет → append с `<!-- clarify <date>: <Q-id> -->` маркером), затем сразу переведи статус этой записи в `applied`. Не пачкой в конце — крэш посередине не должен молча терять факт «применено, но статус не обновлён» (см. Red flags).
 
 ## Шаг 8 — queue-check
 
@@ -75,7 +84,7 @@ Load `references/refute-prompt.md` и прогони каждую находку
 ${CLAUDE_PLUGIN_ROOT}/skills/clarify/scripts/queue-check.sh
 ```
 
-`ok:false` (unapplied непуст, либо инвариант `options[0]!==recommended` нарушен) → почини записи по `data`, **не коммить**, повтори. Это единственный источник цифр `pending_critical`/`pending_total`/`auto_closed_critical` — он же пишет их в `state.json`.
+`ok:false` (unapplied непуст либо инвариант нарушен) → почини по `data`, **не коммить**, повтори. Единственный источник цифр `pending_critical`/`pending_total`/`auto_closed_critical` — он же пишет их в `state.json`.
 
 ## Шаг 9 — state: phase
 
@@ -83,7 +92,7 @@ ${CLAUDE_PLUGIN_ROOT}/skills/clarify/scripts/queue-check.sh
 ${CLAUDE_PLUGIN_ROOT}/lib/state.sh set phase clarify-done
 ```
 
-Только после `queue-check.sh` ok:true — `pending_critical`/`pending_total`/`auto_closed_critical` уже записаны им на Шаге 8.
+Только после `queue-check.sh` ok:true — счётчики уже записаны им на Шаге 8.
 
 ## Шаг 10 — finalize
 
@@ -91,7 +100,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh set phase clarify-done
 ${CLAUDE_PLUGIN_ROOT}/lib/finalize.sh clarify <msg-file>
 ```
 
-`<msg-file>` первой строкой: `chore: clarify brief`. Коммитит `project_brief` + `.claude/state/state.json`.
+`<msg-file>` первой строкой: `chore: clarify brief`. Коммитит `project_brief` + `state.json`.
 
 ## Rationalization table (red flags)
 

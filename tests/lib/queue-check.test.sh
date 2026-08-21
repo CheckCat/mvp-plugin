@@ -75,6 +75,9 @@ assert_eq "(1) unapplied ok:false" "False" "$(json_field "$Q_OUT" 'd["ok"]')"
 assert_eq "(1) unapplied lists Q-001" "['Q-001']" "$(json_field "$Q_OUT" 'd["data"]["unapplied"]')"
 assert_eq "(1) unapplied counts.critical" "1" "$(json_field "$Q_OUT" 'd["data"]["counts"]["critical"]')"
 assert_eq "(1) unapplied counts.medium" "1" "$(json_field "$Q_OUT" 'd["data"]["counts"]["medium"]')"
+assert_eq "(1) unapplied counts.pending_critical" "0" "$(json_field "$Q_OUT" 'd["data"]["counts"]["pending_critical"]')"
+assert_eq "(1) unapplied counts.pending_medium" "1" "$(json_field "$Q_OUT" 'd["data"]["counts"]["pending_medium"]')"
+assert_eq "(1) unapplied counts.pending_low" "0" "$(json_field "$Q_OUT" 'd["data"]["counts"]["pending_low"]')"
 assert_eq "(1) unapplied counts.pending_total" "1" "$(json_field "$Q_OUT" 'd["data"]["counts"]["pending_total"]')"
 
 # --- (2) all applied -> ok:true, correct counts + auto_closed_critical -----
@@ -93,6 +96,8 @@ assert_eq "(2) counts.critical" "2" "$(json_field "$Q_OUT" 'd["data"]["counts"][
 assert_eq "(2) counts.medium" "1" "$(json_field "$Q_OUT" 'd["data"]["counts"]["medium"]')"
 assert_eq "(2) counts.low" "1" "$(json_field "$Q_OUT" 'd["data"]["counts"]["low"]')"
 assert_eq "(2) counts.pending_critical" "0" "$(json_field "$Q_OUT" 'd["data"]["counts"]["pending_critical"]')"
+assert_eq "(2) counts.pending_medium" "0" "$(json_field "$Q_OUT" 'd["data"]["counts"]["pending_medium"]')"
+assert_eq "(2) counts.pending_low" "0" "$(json_field "$Q_OUT" 'd["data"]["counts"]["pending_low"]')"
 assert_eq "(2) counts.pending_total" "0" "$(json_field "$Q_OUT" 'd["data"]["counts"]["pending_total"]')"
 
 # state.json side effects
@@ -140,9 +145,32 @@ run_qc "$d5"
 assert_eq "(5) missing file exit code" "0" "$Q_EXIT"
 assert_eq "(5) missing file ok:true" "True" "$(json_field "$Q_OUT" 'd["ok"]')"
 assert_eq "(5) missing file counts.critical" "0" "$(json_field "$Q_OUT" 'd["data"]["counts"]["critical"]')"
+assert_eq "(5) missing file counts.pending_medium" "0" "$(json_field "$Q_OUT" 'd["data"]["counts"]["pending_medium"]')"
+assert_eq "(5) missing file counts.pending_low" "0" "$(json_field "$Q_OUT" 'd["data"]["counts"]["pending_low"]')"
 assert_eq "(5) missing file counts.pending_total" "0" "$(json_field "$Q_OUT" 'd["data"]["counts"]["pending_total"]')"
 sc5_out="$(cd "$d5" && "$state" get pending_critical)"
 assert_eq "(5) missing file state pending_critical" "0" "$(json_field "$sc5_out" 'd["data"]["value"]')"
+
+# --- (5b) resume mix: some records already answered/applied, some still
+#          pending across different severities -> pending_medium/pending_low
+#          must reflect ONLY the remaining pending ones, not the totals
+#          (this is the case Step 5 of SKILL.md relies on after a resume).
+
+d5b="$(new_project_dir)"
+write_queue "$d5b" \
+  "$(rec Q-001 critical applied auto '["A"]' A)" \
+  "$(rec Q-002 medium pending null '["B","C"]' B)" \
+  "$(rec Q-003 medium pending null '["D","E"]' D)" \
+  "$(rec Q-004 low applied human '["F"]' F)" \
+  "$(rec Q-005 low pending null '["G"]' G)"
+run_qc "$d5b"
+assert_eq "(5b) resume mix exit code" "0" "$Q_EXIT"
+assert_eq "(5b) resume mix counts.medium (total)" "2" "$(json_field "$Q_OUT" 'd["data"]["counts"]["medium"]')"
+assert_eq "(5b) resume mix counts.low (total)" "2" "$(json_field "$Q_OUT" 'd["data"]["counts"]["low"]')"
+assert_eq "(5b) resume mix counts.pending_critical" "0" "$(json_field "$Q_OUT" 'd["data"]["counts"]["pending_critical"]')"
+assert_eq "(5b) resume mix counts.pending_medium" "2" "$(json_field "$Q_OUT" 'd["data"]["counts"]["pending_medium"]')"
+assert_eq "(5b) resume mix counts.pending_low" "1" "$(json_field "$Q_OUT" 'd["data"]["counts"]["pending_low"]')"
+assert_eq "(5b) resume mix counts.pending_total" "3" "$(json_field "$Q_OUT" 'd["data"]["counts"]["pending_total"]')"
 
 # --- (6) argv guard: unexpected extra argument -> ok:false, usage hint ------
 
