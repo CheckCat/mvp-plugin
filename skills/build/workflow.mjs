@@ -1,7 +1,7 @@
 // skills/build/workflow.mjs — mvp:build DAG task loop.
 //
 // Run by the Workflow tool: `Workflow({scriptPath: <this file>, args:{run_id,
-// now, max_tasks, task_id?, plugin_root}})`. This module has NO filesystem
+// now, max_tasks, task_id?, plugin_root, project_root?}})`. This module has NO filesystem
 // access, NO Date.now()/Math.random()/argless `new Date()` (they throw in
 // this sandbox), and no `import`/`require` of anything — it is pure
 // standard JS plus a fixed set of ambient hooks the Workflow runtime injects
@@ -11,11 +11,12 @@
 //   phase(title)                              (available, unused — see below)
 //   log(msg)                                  workflow-visible log line
 //   args                                      the {run_id, now, max_tasks,
-//                                              task_id?, plugin_root} object
-//                                              passed to Workflow(); the
-//                                              SKILL generates run_id/now
-//                                              once and passes them in — this
-//                                              script never calls Date/etc.
+//                                              task_id?, plugin_root,
+//                                              project_root?} object passed
+//                                              to Workflow(); the SKILL
+//                                              generates run_id/now once and
+//                                              passes them in — this script
+//                                              never calls Date/etc.
 //   budget                                    token-budget accessor; only
 //                                              `budget.spent()` is used here
 //                                              (see design note 7).
@@ -115,6 +116,9 @@
 //    rejection. Full halt vocabulary this module can return:
 //    all-done | dag-stuck | interrupt | dirty-tree | stop-and-ask | bad-args
 //    | error | null (null = ordinary completion, cap reached, nothing wrong).
+//    Confirmed with the controller (round-2 review): `halt: null` IS the
+//    tasks-cap/success signal — Task 15's SKILL halt table treats a `null`
+//    halt as "ran to completion cleanly," not as a case needing dispatch.
 //
 // 10. lib/review-package.sh was rewritten in this fix round (controller
 //     ruling — authorized cross-file touch beyond plan-io.mjs): it used to
@@ -155,7 +159,62 @@
 //     `run_id`/`now` from `args`, merged on exactly once at the outermost
 //     return point, so the calling SKILL can label a ledger/blockers message
 //     with which run produced it without threading those two fields through
-//     every internal return site by hand.
+//     every internal return site by hand. `project_root` (design note 14) is
+//     merged in at that same point, but only when it was actually provided.
+//
+// 14. project_root (round-2 fix, controller-discovered integration gap):
+//     workflow subagents (relay agents AND implementer/validator/reviewer/
+//     fix/re-review/patch-writer/commit-msg-writer) inherit the CONTROLLER
+//     session's cwd, not necessarily the target project's root. In the
+//     common case (mvp:build's SKILL already `cd`'d to the target project
+//     before calling Workflow()) that's a no-op — cwd already IS the
+//     project root. But the dry-run fixture (and any future out-of-cwd
+//     invocation: a worktree run, a remote agent, etc.) needs an explicit
+//     root, since the controller session's own cwd is this PLUGIN repo, not
+//     the synthetic tmp git repo the fixture builds. `args.project_root` is
+//     optional (validateArgs never fails on its absence — see design note
+//     re: fail-fast). When set:
+//       - relayLine() (and therefore every relay() call, since relay()
+//         wraps it) prefixes the command with `cd "<project_root>" && `
+//         before it ever reaches the relay agent's Bash prompt — every
+//         relative path inside plan-io.mjs/validate-task.sh/
+//         review-package.sh/apply-patches.py/finalize.sh's own logic (which
+//         all assume cwd == target project root, per each script's own
+//         header) then resolves correctly regardless of the controller's
+//         actual cwd. `${lib}` stays a plugin-repo-absolute path
+//         (`args.plugin_root` is unaffected by project_root — the plugin's
+//         own scripts don't move), so the script itself is still found.
+//       - Every non-relay agent dispatch (implementer, implementer-retry,
+//         validator, reviewer, fix, re-review, and the two raw Write-tool
+//         agents for patches.json/commit-msg) gets an explicit first line —
+//         `Work from directory: <project_root> (cd there before any
+//         command; all relative paths are relative to it).` — via the
+//         shared `cwdPrefixLine()` helper, since those agents read
+//         BRIEF_PATH/BOUNDARY/PACKAGE_PATH/etc. as paths relative to the
+//         project root and have no other way to learn what that root is.
+//     `project_root` is included in the workflow's return payload (merged
+//     alongside `run_id`/`now`) whenever it was provided, so the calling
+//     SKILL/ledger can see which root a given run actually operated against.
+//
+// 15. Known scope note, documentation only, no code change (round-2 review):
+//     lib/review-package.sh's untracked-file listing (design note 10) is
+//     repo-wide — it does not filter by task boundary. In a real bootstrapped
+//     target project this is expected to stay quiet because state-adjacent
+//     scratch paths are typically gitignored; the dry-run fixture
+//     (tests/fixtures/dryrun/make-dryrun.sh) does NOT add a .gitignore, so
+//     once a real run starts writing `.claude/state/briefs/`, `reports/`,
+//     `review/`, `patches-*.json`, `commit-msg-*.txt`, etc., those will show
+//     up as "untracked" noise in later tasks' review packages alongside the
+//     actual new file(s) a task creates. Deliberately left the fixture as-is
+//     rather than adding a `.gitignore`: the fixture's job is to exercise
+//     the real, unfiltered behavior of review-package.sh end-to-end (which
+//     is exactly what a controller dry-run needs to see), and inventing a
+//     gitignore convention here would be presuming a real-project pattern
+//     that isn't actually established anywhere else in this plugin
+//     (checked: no other lib/skills output ships a .gitignore template).
+//     If the noise proves genuinely disruptive at the dry-run, the fix is a
+//     one-line `.claude/state/.gitignore` added to make-dryrun.sh, not a
+//     change to review-package.sh itself.
 
 export const meta = {
   name: 'mvp-build',
@@ -191,12 +250,33 @@ const RELAY_SCHEMA = {
   additionalProperties: false,
 };
 
+// withCwd(cmd) -> cmd, prefixed with `cd "<project_root>" && ` when
+// args.project_root is set (design note 14). No-op (returns cmd unchanged)
+// in the common case where the calling session's cwd already IS the target
+// project root.
+function withCwd(cmd) {
+  return args.project_root ? `cd "${args.project_root}" && ${cmd}` : cmd;
+}
+
+// cwdPrefixLine() -> a prompt-prefix line for non-relay agent dispatches
+// (design note 14), or '' when args.project_root is unset. Every dispatched
+// agent (implementer, validator, reviewer, fix, re-review, patch-writer,
+// commit-msg-writer) reads paths that are relative to the target project
+// root and has no other way to learn what that root is when it differs from
+// the controller session's own cwd.
+function cwdPrefixLine() {
+  return args.project_root
+    ? `Work from directory: ${args.project_root} (cd there before any command; all relative paths are relative to it).\n\n`
+    : '';
+}
+
 // relayLine(cmd, opts) -> raw last-stdout-line string, unparsed. Relays never
 // receive file contents — only the command to run and a one-line JSON reply
 // back. Used directly (never via relay()'s JSON.parse layer) for commands
 // whose output is not itself JSON: `git rev-parse HEAD`, park()'s git reset.
 async function relayLine(cmd, opts = {}) {
-  const prompt = `Run exactly this command via Bash from the current project root:\n${cmd}\nReturn the LAST line of stdout verbatim as {"line": "..."}. Do not add anything.`;
+  const fullCmd = withCwd(cmd);
+  const prompt = `Run exactly this command via Bash:\n${fullCmd}\nReturn the LAST line of stdout verbatim as {"line": "..."}. Do not add anything.`;
   const callOpts = {
     model: 'haiku',
     effort: 'low',
@@ -206,7 +286,7 @@ async function relayLine(cmd, opts = {}) {
   };
   const out = await agent(prompt, callOpts);
   if (!out || typeof out.line !== 'string') {
-    throw new Error(`relayLine: agent did not return a {line:string} object for cmd=${cmd}`);
+    throw new Error(`relayLine: agent did not return a {line:string} object for cmd=${fullCmd}`);
   }
   return out.line;
 }
@@ -289,7 +369,7 @@ async function dispatchAgentText(prompt, { model, phase, label, agentType }) {
 // --- prompt builders (template self-read — see design note 3) ----------------
 
 function implementerPrompt({ briefPath, boundary, taskId, reportPath }) {
-  return [
+  return cwdPrefixLine() + [
     `Read ${args.plugin_root}/skills/build/agents/implementer.md and follow it exactly with these substitutions:`,
     `BRIEF_PATH=${briefPath}`,
     `BOUNDARY=${boundary}`,
@@ -303,7 +383,7 @@ function implementerRetryPrompt(basePrompt, violations) {
 }
 
 function validatorPrompt({ taskId, boundary, violations }) {
-  return [
+  return cwdPrefixLine() + [
     `Read ${args.plugin_root}/skills/build/agents/validator.md and follow it exactly with these substitutions:`,
     `TASK_ID=${taskId}`,
     `BOUNDARY=${boundary}`,
@@ -312,7 +392,7 @@ function validatorPrompt({ taskId, boundary, violations }) {
 }
 
 function reviewerPrompt({ taskId, briefPath, packagePath }) {
-  return [
+  return cwdPrefixLine() + [
     `Read ${args.plugin_root}/skills/build/agents/reviewer.md and follow it exactly with these substitutions:`,
     `TASK_ID=${taskId}`,
     `BRIEF_PATH=${briefPath}`,
@@ -321,7 +401,7 @@ function reviewerPrompt({ taskId, briefPath, packagePath }) {
 }
 
 function fixPrompt({ taskId, boundary, findings, reportPath }) {
-  return [
+  return cwdPrefixLine() + [
     `Read ${args.plugin_root}/skills/build/agents/fix.md and follow it exactly with these substitutions:`,
     `TASK_ID=${taskId}`,
     `BOUNDARY=${boundary}`,
@@ -331,7 +411,7 @@ function fixPrompt({ taskId, boundary, findings, reportPath }) {
 }
 
 function reReviewPrompt({ taskId, packagePath, findings }) {
-  return [
+  return cwdPrefixLine() + [
     `Read ${args.plugin_root}/skills/build/agents/re-review.md and follow it exactly with these substitutions:`,
     `TASK_ID=${taskId}`,
     `PACKAGE_PATH=${packagePath}`,
@@ -448,7 +528,7 @@ function parseReReview(text) {
 async function applyPatchesFlow(id, patches, phaseTitle) {
   const patchesPath = `.claude/state/patches-${id}.json`;
   await agent(
-    `Write EXACTLY this JSON to ${patchesPath} using the Write tool (create the file, overwrite any existing content, no extra text, no markdown code fences):\n${JSON.stringify(patches)}`,
+    `${cwdPrefixLine()}Write EXACTLY this JSON to ${patchesPath} using the Write tool (create the file, overwrite any existing content, no extra text, no markdown code fences):\n${JSON.stringify(patches)}`,
     { model: 'haiku', effort: 'low', phase: phaseTitle, label: `patch-writer-${id}` },
   );
   const applyResult = await relay(`python3 "${lib}/apply-patches.py" "${patchesPath}" --stage`, {
@@ -617,7 +697,7 @@ async function finalize(id, title, declaredFiles, tokensDelta, phaseTitle) {
   const subject = title ? `feat: task ${id}: ${title}` : `feat: task ${id}`;
   const msgPath = `.claude/state/commit-msg-${id}.txt`;
   await agent(
-    `Write EXACTLY this text to ${msgPath} using the Write tool (create the file, overwrite any existing content, no extra text, no markdown code fences):\n${subject}\n`,
+    `${cwdPrefixLine()}Write EXACTLY this text to ${msgPath} using the Write tool (create the file, overwrite any existing content, no extra text, no markdown code fences):\n${subject}\n`,
     { model: 'haiku', effort: 'low', phase: phaseTitle, label: `msg-writer-${id}` },
   );
 
@@ -743,6 +823,12 @@ function validateArgs(a) {
   if (typeof a.max_tasks !== 'number' || !Number.isFinite(a.max_tasks) || a.max_tasks <= 0) {
     return { halt: 'bad-args', detail: `max_tasks must be a positive number, got: ${JSON.stringify(a.max_tasks)}` };
   }
+  // project_root is OPTIONAL (design note 14) — absence is never a bad-args
+  // failure. When present it must be a non-empty string, same shape rule as
+  // every other path-like arg.
+  if (a.project_root !== undefined && (typeof a.project_root !== 'string' || a.project_root === '')) {
+    return { halt: 'bad-args', detail: `project_root, if given, must be a non-empty string, got: ${JSON.stringify(a.project_root)}` };
+  }
   return null;
 }
 
@@ -797,5 +883,7 @@ export default await (async () => {
     }
   })();
 
-  return { ...inner, run_id: args?.run_id, now: args?.now };
+  const labels = { run_id: args?.run_id, now: args?.now };
+  if (args?.project_root) labels.project_root = args.project_root;
+  return { ...inner, ...labels };
 })();
