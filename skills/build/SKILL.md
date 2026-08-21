@@ -46,7 +46,7 @@ Workflow({
 | `all-done` | ТОЛЬКО `detail` (обычно пусто) † | `${CLAUDE_PLUGIN_ROOT}/lib/state.sh set phase done`, покажи хвост `ledger.md`. **NEXT: Use mvp:retro**. |
 | `dag-stuck` | `detail` — блокирующие id+статус (`blocking tasks: 004(failed), 007(pending)`) либо `task X has unmet deps: ...` † | Обычно причина — упавшая (`failed`) задача блокирует зависимых. Не Stop&Ask автоматом — сверься с закрытым списком ниже; если не подпадает — реши сам (ruling) и перезапусти именно блокирующую задачу: `args:{..., task_id: "<blocking-id>"}` — явный `task_id` обходит фильтр `status===pending` в `plan-io.mjs next`, единственный путь повторно продиспатчить `failed`-задачу. |
 | `interrupt` | нет `detail` — только факт, что `.claude/state/user-interrupt.md` существует † | Подтверди у оператора продолжение. Да → удали файл, перезапусти. Нет → остановись, файл не трогай. |
-| `dirty-tree` | `detail` здесь вдвойне ненадёжен: `plan-io.mjs next` кладёт список в поле `files`, а `workflow.mjs` при пробросе халта читает только `adv.data.detail` — фактически придёт `detail: undefined` (известный разрыв в уже сданном `workflow.mjs`, задокументирован как есть, не мой файл на этой задаче) † | Не полагайся на payload — выполни сам `git status --porcelain -- . ':!.claude/state'`, покажи файлы оператору, предложи `git checkout -- <files>` (сброс) или ручной коммит вне пайплайна, затем перезапусти. |
+| `dirty-tree` | `files` — список грязных путей (`plan-io.mjs next` кладёт его туда, `workflow.mjs` пробрасывает); `detail` при этом халте пуст † | Покажи `files` оператору. Если поля нет (старый payload) — сверься сам: `git status --porcelain -- . ':!.claude/state'`. Предложи `git checkout -- <files>` (сброс) или ручной коммит вне пайплайна, затем перезапусти. |
 | `stop-and-ask` | `task_id`, `detail` = причина `park()` (implementer BLOCKED/NEEDS_CONTEXT текст, либо validate/review-лестница исчерпана) † | Прочитай статус `task_id` в `.claude/state/plan.json` (уже `failed`, дерево уже чистое — `park()` сам делает `git checkout`+unstage) и `.claude/state/blockers.md` (пишет диспатченный агент по контракту `_common.md`, не `workflow.mjs`). `AskUserQuestion` с этим контекстом. Решение запиши в `.claude/state/decisions.log` — Write/Edit append строкой `[task_id] решение — обоснование` (это НЕ pipeline-state, а журнал оператора; пишет сама сессия, не скрипт). Перезапусти ту же задачу явным `task_id`. |
 | `bad-args` / `error` | `detail` — текст ошибки | Не контентное решение, а сбой аргументов/окружения. Покажи `detail` как есть, Stop&Ask (почини вызов или прерви run) — не угадывай фикс сам. |
 
@@ -62,7 +62,8 @@ Workflow({
 |---|---|
 | «План почти валиден, поправлю поле на лету» | так v1 терял service и валил рабочий код — только plan-io |
 | «Ревью можно скипнуть, молекула тривиальная» | 7/16 тривиальных молекул baseline содержали реальные баги |
-| «git add -A, файлов много» | finalize.sh стейджит explicit-списком, всегда |
+| «git add -A, файлов много» | finalize.sh стейджит явными путями (граница задачи + `.claude/state`), всегда |
+| «`files` в плане не сошлись с диффом — задача провалена» | `files` — подсказка планировщика, контракт — граница; такое расхождение приходит как concern, не как halt |
 
 ## Red flags
 

@@ -19,11 +19,18 @@ The task's boundary is `{{BOUNDARY}}`.
 
 Judge, don't guess:
 - Read only what you need to understand each violation — the failing CI
-  output in a `ci` violation's `detail`, the offending path in a
-  `boundary` or `declared` violation.
+  output in a `ci` violation's `detail`, the offending path in a `boundary`
+  violation.
 - Decide whether the fix is trivial and mechanical (an unused import, a
-  stray formatting issue, an obviously-typo'd declared-files entry) or
-  whether it needs real implementer judgment.
+  stray formatting issue) or whether it needs real implementer judgment.
+
+Judge `ci` and `boundary` violations only. A `declared` violation is a
+file-list HINT mismatch: the plan's `files` list is planning-time
+observability, not a contract, so the workflow never calls you for a
+declared-only set — one can only reach you riding along with a real `ci` or
+`boundary` failure. Ignore it: never propose a patch for it, and never let
+it alone drive a `park`. `plan.json` is not yours to edit, and no patch of
+yours is ever applied to it.
 
 ## You Are Read-Only Toward Product Files
 

@@ -93,7 +93,8 @@
 //    --files must be the plan's declared list (not the implementer's
 //    self-reported FILES: line — that source lost fields before, per v1
 //    lessons baked into this project's invariants); the commit subject needs
-//    a human-readable title, not just a bare id.
+//    a human-readable title, not just a bare id. What a `declared` mismatch
+//    MEANS, though, is a hint, not a block — see design note 17.
 //
 // 6. Caps: IMPLEMENTER_RETRY_CAP=1, TOTAL_ATTEMPTS_CAP=2 (1 initial + 1
 //    retry, never more), RE_REVIEW_CYCLES_CAP=1 (one fix -> re-review pass,
@@ -146,11 +147,9 @@
 //     command string is double-quoted (`"${boundary}"`, `"${lib}/..."`,
 //     etc.) so a value containing a space or shell metacharacter can't split
 //     into extra argv words or get re-parsed by the shell the relay agent
-//     runs the command through. The one exception is `finalize.sh`'s
-//     `--files` list, which must stay as N separate shell-quoted arguments
-//     (`"f1" "f2" ...`), not one big quoted blob — folding the whole list
-//     into a single pair of quotes would turn N files into one argument and
-//     silently break the build-task scope's file staging.
+//     runs the command through. This includes `finalize.sh`'s `--files`
+//     argument, which since the final-review round is a SINGLE path — the
+//     task's boundary (design note 17b) — not a list.
 //
 // 12. relay() retryability (fix round, RULED): a JSON-parse-failure retry is
 //     safe only for read-only or overwrite-idempotent commands (plan-io.mjs
@@ -253,6 +252,38 @@
 //     `withRunLabels()`, and the entry point's own `plugin_root`/
 //     `max_tasks`/`task_id` reads. `args` itself is referenced in exactly
 //     one place now: the `typeof args === 'string'` coercion check.
+//
+// 17. files = OBSERVABILITY HINT, boundary = CONTRACT (final-review round,
+//     controller ruling on finding C1). The three-file contract used to
+//     conflict with itself: plan.json's per-task `files` list was declared a
+//     planning hint everywhere else in v2 (the brief calls it a hint, the
+//     implementer template names the BOUNDARY as its only hard rule and
+//     explicitly expects tests it wasn't told to declare), yet
+//     validate-task.sh enforced it EXHAUSTIVELY — a test file the plan never
+//     listed produced a `declared`/undeclared-files violation that blocked
+//     the task through the whole validator ladder. Resolution, in two parts:
+//     a) VALIDATE. runValidateLadder() checks the violation set BEFORE
+//        entering the ladder: if validate-task.sh failed and EVERY violation
+//        has `check === "declared"`, validation is treated as PASSED — the
+//        detail is `log()`ged and pushed onto `ctx.concerns` as a one-line
+//        note (so it still surfaces in the workflow's return payload, and
+//        from there into the operator's ledger via the SKILL). `ci` and
+//        `boundary` violations are unchanged: they block, they go to the
+//        validator, they can park the task. A MIXED list (declared + ci
+//        and/or boundary) also blocks exactly as before — the shortcut is
+//        deliberately declared-ONLY, so a real CI/boundary failure can never
+//        be waved through by an accompanying file-list mismatch.
+//     b) FINALIZE. Staging is by BOUNDARY, not by the declared list:
+//        finalize()'s `--files` argument is the task's `boundary` path (plus
+//        `.claude/state`, which finalize.sh's build-task scope appends on its
+//        own). Staging the declared list would have SILENTLY DROPPED exactly
+//        the files part (a) just stopped blocking on — an undeclared test
+//        file would pass validation, get reviewed, and then never be
+//        committed. Still explicit (one named path, never `git add -A`), per
+//        this pipeline's staging rule. The declared list is still passed to
+//        validate-task.sh `--files` (that is what produces the hint in the
+//        first place) and is still what plan.json holds; nothing patches
+//        plan.json at runtime.
 
 export const meta = {
   name: 'mvp-build',
@@ -602,11 +633,35 @@ function safeBudgetSpent() {
 
 // --- validate ladder -----------------------------------------------------------
 
+// declaredOnly(violations) -> true iff there IS at least one violation and
+// every single one is a `declared` (file-list) mismatch. Design note 17a:
+// the declared list is an observability hint, so a violation set made up of
+// nothing but declared mismatches is a concern, never a block. Written as
+// "some violations AND all of them declared" so an empty array (which never
+// reaches here — an empty set means val.ok) can't be mistaken for a pass.
+function declaredOnly(violations) {
+  return violations.length > 0 && violations.every((v) => v && v.check === 'declared');
+}
+
+// noteDeclaredOnly: record the hint on the task's concerns so it still
+// reaches the operator (through the workflow's return payload -> the SKILL's
+// ledger line), then let the task proceed.
+function noteDeclaredOnly(ctx, violations, stage) {
+  const detail = violations.map((v) => (v && v.detail) || '').join('; ');
+  log(
+    `task ${ctx.id}: validate-task.sh (${stage}) reported ONLY declared-file mismatches — plan.json's files list is an observability hint, not a contract (design note 17a), so this does NOT block: ${detail}`,
+  );
+  ctx.concerns.push(`declared-files hint mismatch (non-blocking, ${stage}): ${detail}`);
+}
+
 // Returns {parked:false} on success, or {parked:true, why} to park the task.
 // Ladder: a validator PATCHES verdict gets one direct apply+re-validate
 // attempt that does NOT consume the implementer-retry budget; a 'retry'
 // verdict (or a patch that still leaves violations) falls through to the
 // single capped implementer retry; anything still failing after that parks.
+// At EVERY validate call, a declared-only violation set short-circuits to
+// success first (design note 17a) — the ladder below only ever sees ci /
+// boundary / mixed failures.
 async function runValidateLadder(ctx) {
   const validateCmd = () => `bash "${lib}/validate-task.sh" "${ctx.id}" --boundary "${ctx.boundary}" --files "${ctx.filesCsv}"`;
 
@@ -614,6 +669,11 @@ async function runValidateLadder(ctx) {
   if (val.ok) return { parked: false };
 
   let violations = (val.data && val.data.violations) || [];
+  if (declaredOnly(violations)) {
+    noteDeclaredOnly(ctx, violations, 'initial');
+    return { parked: false };
+  }
+
   const verdictText = await agentText(validatorPrompt({ taskId: ctx.id, boundary: ctx.boundary, violations }), {
     model: 'sonnet',
     phase: 'Validate',
@@ -626,6 +686,10 @@ async function runValidateLadder(ctx) {
     val = await relay(validateCmd(), { phase: 'Validate', label: `validate-${ctx.id}-2` });
     if (val.ok) return { parked: false };
     violations = (val.data && val.data.violations) || violations;
+    if (declaredOnly(violations)) {
+      noteDeclaredOnly(ctx, violations, 'post-patches');
+      return { parked: false };
+    }
   } else if (verdict.verdict === 'park') {
     return { parked: true, why: `validator VERDICT: park — violations: ${JSON.stringify(violations)}` };
   }
@@ -656,7 +720,12 @@ async function runValidateLadder(ctx) {
 
   val = await relay(validateCmd(), { phase: 'Validate', label: `validate-${ctx.id}-3` });
   if (!val.ok) {
-    return { parked: true, why: `validate-task.sh still failing after implementer retry: ${JSON.stringify((val.data && val.data.violations) || [])}` };
+    const retryViolations = (val.data && val.data.violations) || [];
+    if (declaredOnly(retryViolations)) {
+      noteDeclaredOnly(ctx, retryViolations, 'post-retry');
+      return { parked: false };
+    }
+    return { parked: true, why: `validate-task.sh still failing after implementer retry: ${JSON.stringify(retryViolations)}` };
   }
   return { parked: false };
 }
@@ -737,7 +806,7 @@ async function runReviewLadder(ctx) {
 
 // --- finalize ---------------------------------------------------------------------
 
-async function finalize(id, title, declaredFiles, tokensDelta, phaseTitle) {
+async function finalize(id, title, boundary, tokensDelta, phaseTitle) {
   const subject = title ? `feat: task ${id}: ${title}` : `feat: task ${id}`;
   const msgPath = `.claude/state/commit-msg-${id}.txt`;
   await agent(
@@ -745,12 +814,14 @@ async function finalize(id, title, declaredFiles, tokensDelta, phaseTitle) {
     { model: 'haiku', effort: 'low', phase: phaseTitle, label: `msg-writer-${id}` },
   );
 
-  // Each file gets its own quotes — folding the whole space-joined list into
-  // ONE pair of quotes would turn N files into a single argument and break
-  // finalize.sh build-task's --files staging (design note 11).
-  const filesSpaceList = declaredFiles.map((f) => `"${f}"`).join(' ');
+  // Staging scope is the task's BOUNDARY, not its declared file list (design
+  // note 17b): the declared list is a hint, so anything the task legitimately
+  // created inside the boundary but the plan never listed (a test file, a
+  // fixture) must still be committed. One quoted path — explicit, never
+  // `git add -A`; finalize.sh's build-task scope appends `.claude/state`
+  // itself, which is where the report/brief/state files live.
   const fin = await relay(
-    `node "${lib}/plan-io.mjs" complete "${id}" --tokens ${tokensDelta} && bash "${lib}/finalize.sh" build-task "${msgPath}" --files ${filesSpaceList}`,
+    `node "${lib}/plan-io.mjs" complete "${id}" --tokens ${tokensDelta} && bash "${lib}/finalize.sh" build-task "${msgPath}" --files "${boundary}"`,
     { phase: phaseTitle, label: `finalize-${id}`, retryable: false },
   );
   if (!fin.ok) {
@@ -774,6 +845,12 @@ async function finalize(id, title, declaredFiles, tokensDelta, phaseTitle) {
 // task's boundary — including untracked files the implementer created
 // (`git clean -fd`, fix round item 2/7: without it, an untracked file left
 // behind would make every subsequent `plan-io next` halt dirty-tree forever)
+// but NEVER `.claude/state` (final-review finding I1: a root-level boundary
+// — `.` — made that clean wipe the pipeline's own state directory, i.e. the
+// brief, the report and the freshly-written failed-status plan.json, taking
+// the run's memory with it). `-e .claude/state` must come BEFORE the `--`:
+// after it, git parses `-e` as a pathspec, not a flag (verified empirically
+// in a scratch repo — the post-`--` form removed .claude/state anyway)
 // — mark it failed via plan-io.mjs (the only mutating, park-safe subcommand
 // — plan-io has no dedicated "park" verb), and return a stop-and-ask halt.
 // The reset line's output is not JSON (often no output at all), so this uses
@@ -784,7 +861,7 @@ async function finalize(id, title, declaredFiles, tokensDelta, phaseTitle) {
 // files itself.
 async function park(id, boundary, why) {
   await relayLine(
-    `git checkout -- "${boundary}" 2>/dev/null; git restore --staged "${boundary}" 2>/dev/null; git clean -fd -- "${boundary}" 2>/dev/null; true`,
+    `git checkout -- "${boundary}" 2>/dev/null; git restore --staged "${boundary}" 2>/dev/null; git clean -fd -e .claude/state -- "${boundary}" 2>/dev/null; true`,
     { phase: 'Finalize', label: `park-clean-${id}` },
   );
   const statusResult = await relay(`node "${lib}/plan-io.mjs" set-status "${id}" failed`, {
@@ -849,7 +926,7 @@ async function runOneTask(adv) {
   const spentAfter = safeBudgetSpent();
   const tokensDelta = Math.max(0, spentAfter - spentBefore);
 
-  const sha = await finalize(id, title, declaredFiles, tokensDelta, 'Finalize');
+  const sha = await finalize(id, title, boundary, tokensDelta, 'Finalize');
 
   return { done: true, task_id: id, sha, tokens_delta: tokensDelta, concerns: ctx.concerns };
 }
@@ -953,8 +1030,14 @@ try {
     }
     if (adv.data && adv.data.halt) {
       // all-done | dag-stuck | interrupt | dirty-tree — propagate verbatim,
-      // the calling SKILL owns the halt-table dispatch.
-      return withRunLabels({ halt: adv.data.halt, detail: adv.data.detail });
+      // the calling SKILL owns the halt-table dispatch. `files` is carried
+      // through too when plan-io.mjs supplied it (final-review finding M5:
+      // the dirty-tree halt puts the offending paths in `data.files`, and
+      // reading only `data.detail` here dropped them, leaving the SKILL to
+      // re-derive the list with its own `git status`).
+      const haltPayload = { halt: adv.data.halt, detail: adv.data.detail };
+      if (adv.data.files !== undefined) haltPayload.files = adv.data.files;
+      return withRunLabels(haltPayload);
     }
 
     const outcome = await runOneTask(adv);
