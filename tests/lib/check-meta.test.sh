@@ -33,8 +33,16 @@ for v in d["data"]["violations"]:
 ' "$1" "$2" 2>/dev/null
 }
 
+# Every fixture gets a VALID .claude/state/ci-mirror.sh by default — it is a
+# check-meta gate now (a real bootstrap always has one by Step 3.2), so the
+# cases that are about CLAUDE.md/ARCHITECTURE.md must not trip over it. The
+# ci-mirror cases below deliberately remove/corrupt it.
 new_project_dir() {
-  mktemp -d -p "$tmproot"
+  local d
+  d="$(mktemp -d -p "$tmproot")"
+  mkdir -p "$d/.claude/state"
+  printf 'uv run ruff check .\nuv run pytest\n' >"$d/.claude/state/ci-mirror.sh"
+  printf '%s' "$d"
 }
 
 write_valid_claude_md() { # <dir>
@@ -243,6 +251,55 @@ assert_eq "(g) exit code" "1" "$CM_EXIT"
 assert_eq "(g) ok:false" "False" "$(json_field "$CM_OUT" 'd["ok"]')"
 if [ -z "$(violations_of_check "$CM_OUT" claude-md-missing)" ]; then
   echo "FAIL: (g) expected claude-md-missing violation: $CM_OUT" >&2
+  fail=1
+fi
+
+# --- (h) ci-mirror.sh missing -> violation ci-mirror-missing ----------------
+# (the (a) case above already covers the positive side: a valid mirror -> ok)
+
+d_h="$(new_project_dir)"
+write_valid_claude_md "$d_h"
+write_valid_architecture_md "$d_h"
+rm "$d_h/.claude/state/ci-mirror.sh"
+
+run_cm "$d_h"
+
+assert_eq "(h) exit code" "1" "$CM_EXIT"
+assert_eq "(h) ok:false" "False" "$(json_field "$CM_OUT" 'd["ok"]')"
+if [ -z "$(violations_of_check "$CM_OUT" ci-mirror-missing)" ]; then
+  echo "FAIL: (h) expected ci-mirror-missing violation: $CM_OUT" >&2
+  fail=1
+fi
+
+# --- (h2) ci-mirror.sh present but comment-only -> ci-mirror-empty ----------
+
+d_h2="$(new_project_dir)"
+write_valid_claude_md "$d_h2"
+write_valid_architecture_md "$d_h2"
+printf '# TODO: fill in the CI commands\n\n' >"$d_h2/.claude/state/ci-mirror.sh"
+
+run_cm "$d_h2"
+
+assert_eq "(h2) exit code" "1" "$CM_EXIT"
+assert_eq "(h2) ok:false" "False" "$(json_field "$CM_OUT" 'd["ok"]')"
+if [ -z "$(violations_of_check "$CM_OUT" ci-mirror-empty)" ]; then
+  echo "FAIL: (h2) expected ci-mirror-empty violation: $CM_OUT" >&2
+  fail=1
+fi
+
+# --- (i) ci-mirror.sh with a bash syntax error -> ci-mirror-syntax ----------
+
+d_i="$(new_project_dir)"
+write_valid_claude_md "$d_i"
+write_valid_architecture_md "$d_i"
+printf 'if uv run pytest\nuv run ruff check .\n' >"$d_i/.claude/state/ci-mirror.sh"
+
+run_cm "$d_i"
+
+assert_eq "(i) exit code" "1" "$CM_EXIT"
+assert_eq "(i) ok:false" "False" "$(json_field "$CM_OUT" 'd["ok"]')"
+if [ -z "$(violations_of_check "$CM_OUT" ci-mirror-syntax)" ]; then
+  echo "FAIL: (i) expected ci-mirror-syntax violation: $CM_OUT" >&2
   fail=1
 fi
 

@@ -184,6 +184,36 @@ if ! echo "$Q_OUT" | grep -q "usage"; then
   fail=1
 fi
 
+# --- (6b) state.sh write failure is REPORTED, not swallowed -----------------
+# No state.json (state.sh init never ran) -> the counters cannot be written;
+# queue-check must fail loudly instead of printing ok:true over stale/absent
+# state that gate.sh will later trust.
+
+d6b="$(mktemp -d -p "$tmproot")"
+mkdir -p "$d6b/project_brief"   # note: NO state.sh init
+write_queue "$d6b" "$(rec Q-001 low applied auto '["A"]' A)"
+run_qc "$d6b"
+assert_eq "(6b) state write failure exit code" "1" "$Q_EXIT"
+assert_eq "(6b) state write failure ok:false" "False" "$(json_field "$Q_OUT" 'd["ok"]')"
+if ! echo "$Q_OUT" | grep -qi "state.sh"; then
+  echo "FAIL: (6b) reason doesn't name state.sh: $Q_OUT" >&2
+  fail=1
+fi
+if [ -z "$(json_field "$Q_OUT" 'd["hint"]')" ]; then
+  echo "FAIL: (6b) hint missing: $Q_OUT" >&2
+  fail=1
+fi
+lines_6b="$(printf '%s' "$Q_OUT" | wc -l | tr -d ' ')"
+assert_eq "(6b) output is single line" "0" "$lines_6b"
+
+# --- (6c) same, on the missing-queue-file path (zero-counts branch) ---------
+
+d6c="$(mktemp -d -p "$tmproot")"
+mkdir -p "$d6c/project_brief"   # no state.json, no queue file either
+run_qc "$d6c"
+assert_eq "(6c) missing-queue + no state exit code" "1" "$Q_EXIT"
+assert_eq "(6c) missing-queue + no state ok:false" "False" "$(json_field "$Q_OUT" 'd["ok"]')"
+
 # --- (7) every output is single-line valid JSON -----------------------------
 
 lines="$(printf '%s' "$Q_OUT" | wc -l | tr -d ' ')"

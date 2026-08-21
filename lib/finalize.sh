@@ -113,11 +113,21 @@ if ! [[ "$SUBJECT" =~ $PREFIX_RE ]]; then
     "first line of msg-file must match ^(feat|fix|ci|chore|test|docs|refactor)(\\(.+\\))?: "
 fi
 
-# --- stage only existing paths (silently skip missing ones) ---------------
+# --- stage paths that exist on disk OR are tracked in git -----------------
+#
+# "Exists on disk" alone is not the right test: a task whose whole job is to
+# DELETE a file leaves that path absent from the working tree while git still
+# tracks it, and skipping it here silently dropped the deletion from the
+# commit (the file stayed in HEAD, and the next `plan-io next` saw a dirty
+# tree forever). `git ls-files --error-unmatch` answers "does git know this
+# path", which is exactly the second half of the condition; a path that is
+# neither on disk nor tracked is still skipped silently, as before.
 
 EXISTING=()
 for p in "${PATHS[@]}"; do
-  [[ -e "$p" ]] && EXISTING+=("$p")
+  if [[ -e "$p" ]] || git ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then
+    EXISTING+=("$p")
+  fi
 done
 
 if [[ ${#EXISTING[@]} -eq 0 ]]; then

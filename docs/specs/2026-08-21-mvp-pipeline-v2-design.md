@@ -267,13 +267,26 @@ brief не разрешает. Остальное — ruling в ledger с цен
 (4) observation-файл в docs/observations/ плагина. Метрики без данных (p50/p90 v1,
 spent_usd, graph_refresh) — удалены из контракта.
 
-### Телеметрия (контракт v2)
+### Телеметрия (контракт v2.0)
 
 Пишут ТОЛЬКО скрипты (Defer&Continue printf от implementer'а — v1-бага — заменяется:
-implementer пишет решение в report-файл, finalize-скрипт переносит в decisions.log и
-телеметрию). События: session_start/end, task_start/complete/parked (с delta tokens, ms,
-role, model, attempt), validator_fail (класс), review_findings (классы), halt.
-Каждое — реальный ISO ts.
+implementer пишет решение в свой report-файл, оттуда его забирает главная сессия и
+`decisions.log`). У каждого события — реальный ISO ts.
+
+**Реализовано в v2.0 — ровно одно событие.** `lib/plan-io.mjs complete` дописывает в
+`.claude/state/telemetry/events.jsonl`:
+
+```json
+{"event":"task_complete","task":"<id>","delta_tokens":<n>,"ts":"<ISO-8601>"}
+```
+
+`mvp:retro` читает только его; других типов в файле не бывает, и додумывать их при
+чтении запрещено.
+
+**Будущие события (не реализованы в v2.0)**: session_start/end, task_start/parked (ms,
+role, model, attempt), validator_fail (класс), review_findings (классы), halt. Это
+направление, а не контракт: пока событие не пишет ни один скрипт, для retro и аналитики
+его не существует.
 
 ## 7. Дисциплинарный слой
 

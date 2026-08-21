@@ -29,6 +29,24 @@
 #                              script (no rules to check yet is a valid
 #                              state before Step 3 of mvp:bootstrap writes
 #                              it) — it just means zero rules are checked.
+#   6. ci-mirror-missing / ci-mirror-empty / ci-mirror-syntax —
+#                              .claude/state/ci-mirror.sh must exist, contain
+#                              something other than whitespace/comments, and
+#                              pass `bash -n`. This is the ONLY other file
+#                              mvp:bootstrap generates that a later stage
+#                              blindly executes: lib/validate-task.sh runs it
+#                              as the single source of lint/test commands for
+#                              EVERY build task, so a missing/empty/malformed
+#                              mirror turns into a `ci` violation on every
+#                              task of the run, long after bootstrap is
+#                              committed. Unlike --invariants, it is NOT
+#                              optional here: Step 3 of mvp:bootstrap writes
+#                              it before Step 6 ever runs, so its absence at
+#                              this point is a real bootstrap failure.
+#                              Path is fixed (.claude/state/ci-mirror.sh) —
+#                              validate-task.sh hardcodes the same literal,
+#                              so making it configurable here would only
+#                              allow the two to disagree.
 #
 # --- Required CLAUDE.md sections (documented mapping, see task-11 report) --
 # ## Стек     — matches project_brief/technical_solutions.md's "## Stack"
@@ -107,13 +125,17 @@ done
 
 # --- checks, all via one python3 call (env vars, never string-interpolated) -
 
+CI_MIRROR=".claude/state/ci-mirror.sh"
+
 RESULT="$(
-  CM_CLAUDE_MD="$CLAUDE_MD" CM_ARCHITECTURE_MD="$ARCHITECTURE_MD" CM_INVARIANTS_MD="$INVARIANTS_MD" python3 -c '
-import json, os, re
+  CM_CLAUDE_MD="$CLAUDE_MD" CM_ARCHITECTURE_MD="$ARCHITECTURE_MD" CM_INVARIANTS_MD="$INVARIANTS_MD" \
+  CM_CI_MIRROR="$CI_MIRROR" python3 -c '
+import json, os, re, subprocess
 
 claude_md = os.environ["CM_CLAUDE_MD"]
 architecture_md = os.environ["CM_ARCHITECTURE_MD"]
 invariants_md = os.environ["CM_INVARIANTS_MD"]
+ci_mirror = os.environ["CM_CI_MIRROR"]
 
 REQUIRED_SECTIONS = ["Стек", "Команды", "Правила"]
 MAX_LINES = 150
@@ -203,9 +225,40 @@ else:
                     "detail": f"{src} --> {dst} violates FORBIDDEN_EDGE: {src_pat} --> {dst_pat}",
                 })
 
+# --- ci-mirror.sh -------------------------------------------------------------
+# Three distinct failure modes, deliberately not collapsed into one check name:
+# "you never wrote it" (Step 3 skipped), "you wrote an empty/comment-only stub"
+# (the mirror would exit 0 and validate every task as green without running
+# anything), and "you wrote something bash cannot parse" (every task fails ci).
+
+if not os.path.isfile(ci_mirror):
+    violations.append({"check": "ci-mirror-missing", "detail": f"not found: {ci_mirror}"})
+else:
+    mirror_text = open(ci_mirror, encoding="utf-8").read()
+    meaningful = [
+        ln for ln in mirror_text.splitlines()
+        if ln.strip() and not ln.strip().startswith("#")
+    ]
+    if not meaningful:
+        violations.append({
+            "check": "ci-mirror-empty",
+            "detail": f"{ci_mirror} has no command lines (only blanks/comments)",
+        })
+    else:
+        proc = subprocess.run(
+            ["bash", "-n", ci_mirror],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        )
+        if proc.returncode != 0:
+            detail = proc.stdout.decode("utf-8", "replace").strip()[:400]
+            violations.append({
+                "check": "ci-mirror-syntax",
+                "detail": f"bash -n failed for {ci_mirror}: {detail}",
+            })
+
 ok = len(violations) == 0
 reason = None if ok else f"{len(violations)} meta violation(s)"
-hint = None if ok else "fix CLAUDE.md/ARCHITECTURE.md per data.violations and rerun check-meta.sh"
+hint = None if ok else "fix CLAUDE.md/ARCHITECTURE.md/.claude/state/ci-mirror.sh per data.violations and rerun check-meta.sh"
 print(json.dumps({"ok": ok, "reason": reason, "hint": hint, "data": {"violations": violations}}))
 '
 )"

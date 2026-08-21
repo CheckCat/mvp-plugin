@@ -146,6 +146,31 @@ if ! echo "$F_OUT" | grep -qi "nothing to commit"; then
   fail=1
 fi
 
+# --- (c3) declared path deleted by the task (tracked, absent from disk)
+#          -> the deletion is staged and lands in the commit -----------------
+
+d_c3="$(new_git_repo)"
+mkdir -p "$d_c3/.claude/state"
+echo '{}' >"$d_c3/.claude/state/state.json"
+echo 'x' >"$d_c3/gone.py"
+(cd "$d_c3" && git add gone.py .claude/state/state.json && git commit -qm "chore: seed")
+rm "$d_c3/gone.py"
+write_msg "$d_c3/msg.txt" "fix: drop gone.py"
+
+run_finalize "$d_c3" build-task msg.txt --files gone.py
+
+assert_eq "(c3) exit code" "0" "$F_EXIT"
+assert_eq "(c3) ok:true" "True" "$(json_field "$F_OUT" 'd["ok"]')"
+DELETED_C3="$(cd "$d_c3" && git show --name-status --pretty=format: HEAD | sed '/^$/d')"
+if ! printf '%s\n' "$DELETED_C3" | grep -q "^D[[:space:]]*gone.py$"; then
+  echo "FAIL: (c3) deletion of gone.py not in commit: $DELETED_C3" >&2
+  fail=1
+fi
+if (cd "$d_c3" && git ls-files --error-unmatch -- gone.py >/dev/null 2>&1); then
+  echo "FAIL: (c3) gone.py still tracked after the commit" >&2
+  fail=1
+fi
+
 # --- argv guard: unknown scope -> ok:false, hint present, exit 1 -------------
 
 d_arg="$(new_git_repo)"

@@ -29,7 +29,9 @@
 #
 # state.json counters (written via lib/state.sh, skipped entirely if check
 # 1 or 2 fails — do not let unparseable/invalid data produce trustworthy-
-# looking counters):
+# looking counters; a state.sh write that FAILS is itself an ok:false outcome
+# of this script, never a silent no-op: gate.sh reads these counters to admit
+# mvp:bootstrap, so a swallowed write means the gate judges stale data):
 #   pending_critical      = count of records: status=="pending" AND severity=="critical"
 #   pending_total         = count of records: status=="pending" (any severity)
 #   auto_closed_critical  = count of records: severity=="critical" AND
@@ -88,6 +90,21 @@ fail() { # <reason> [hint] [data-json]
   exit 1
 }
 
+# state_set <key> <value> — write one state.json counter through lib/state.sh.
+# A failure here is REPORTED, never swallowed: these counters are what
+# gate.sh reads to decide whether mvp:bootstrap may start, so a silently
+# failed write (no state.json yet, unwritable dir, broken JSON) would leave
+# the gate reading a stale — or absent — pending_critical while queue-check
+# still printed ok:true. Fails the whole check with state.sh's own last
+# output as the reason.
+state_set() { # <key> <value>
+  local out
+  if ! out="$("$state_sh" set "$1" "$2" 2>&1)"; then
+    fail "state.sh set $1 failed: $(printf '%s' "$out" | tail -n 1 | head -c 300)" \
+      "run lib/state.sh init in the project root (and check .claude/state is writable), then rerun queue-check.sh"
+  fi
+}
+
 if [ $# -gt 1 ]; then
   fail "unexpected argument: $2" "$USAGE"
 fi
@@ -96,9 +113,9 @@ QUEUE="${1:-project_brief/clarify_queue.jsonl}"
 
 if [ ! -f "$QUEUE" ]; then
   ZERO='{"unapplied":[],"counts":{"critical":0,"medium":0,"low":0,"pending_critical":0,"pending_medium":0,"pending_low":0,"pending_total":0}}'
-  "$state_sh" set pending_critical 0 >/dev/null 2>&1
-  "$state_sh" set pending_total 0 >/dev/null 2>&1
-  "$state_sh" set auto_closed_critical 0 >/dev/null 2>&1
+  state_set pending_critical 0
+  state_set pending_total 0
+  state_set auto_closed_critical 0
   emit_result true "" "" "$ZERO"
   exit 0
 fi
@@ -216,9 +233,9 @@ if [ -s "$AUX_OUT" ]; then
   PC="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pending_critical"])' "$AUX_OUT")"
   PT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pending_total"])' "$AUX_OUT")"
   AC="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["auto_closed_critical"])' "$AUX_OUT")"
-  "$state_sh" set pending_critical "$PC" >/dev/null 2>&1
-  "$state_sh" set pending_total "$PT" >/dev/null 2>&1
-  "$state_sh" set auto_closed_critical "$AC" >/dev/null 2>&1
+  state_set pending_critical "$PC"
+  state_set pending_total "$PT"
+  state_set auto_closed_critical "$AC"
 fi
 
 cat "$CONTRACT_OUT"
