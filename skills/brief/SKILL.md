@@ -35,7 +35,7 @@ ${CLAUDE_PLUGIN_ROOT}/skills/brief/scripts/package-brief.sh discover
 ## Шаг 3 — упаковка (единственное творческое место)
 
 1. `skeleton <tmpdir>` — создаёт `<tmpdir>` с 4 каноническими файлами и всеми обязательными заголовками (`lib/brief-contract.sh`) пустыми.
-2. Прочитай все файлы SOURCE. Разложи факты по секциям через `Edit`: `business_logic.md` (Goal, Roles, Core scenarios, MVP scope, Success criteria), `technical_solutions.md` (Stack — формат `- backend: <v>` бюллетами, Services, Auth, Deploy). `glossary.md`/`analysis_grey_zones.md` заполняй только если в источниках реально есть термины / явные «решили X, а не Y».
+2. Прочитай все файлы SOURCE, разложи факты по секциям через `Edit`: `business_logic.md` (Goal, Roles, Core scenarios, MVP scope, Success criteria), `technical_solutions.md` (Stack — формат `- backend: <v>` бюллетами, Services, Auth, Deploy). `glossary.md`/`analysis_grey_zones.md` — только если в источниках есть термины / явные «решили X, а не Y».
 3. **Не выдумывай факты.** Нет данных под секцией — секция остаётся пустой (заголовок без контента — норма, закрывает её mvp:clarify). Не дублируй контент между файлами.
 
 ## Шаг 4 — Stop&Ask по стеку
@@ -45,9 +45,9 @@ ${CLAUDE_PLUGIN_ROOT}/skills/brief/scripts/package-brief.sh discover
 1. **Не указан** — источники вообще не называют технологию.
 2. **Не в allowlist** — названо что-то вне списка (`spring-boot`, `vue`, ...).
 3. **Противоречив** — источники называют разные значения в разных местах.
-4. **Неоднозначен** — источники дают альтернативу («NestJS или FastAPI», «Next.js / Remix») без выбора, ИЛИ «очевиден» только из косвенных сигналов (упоминания библиотек, шаблоны в `~/.claude/agents/templates/`). Такие сигналы можно упомянуть в `description` опции как рекомендацию — но первая позиция не помечается «рекомендуется», выбор делает оператор.
+4. **Неоднозначен** — источники дают альтернативу («NestJS или FastAPI», «Next.js / Remix») без выбора, ИЛИ «очевиден» только из косвенных сигналов (упоминания библиотек, шаблоны в `~/.claude/agents/templates/`). Такие сигналы — не более чем рекомендация в `description` опции; выбор всегда за оператором.
 
-После ответа — впиши финальный `## Stack` в `<tmpdir>/technical_solutions.md`, затем перезапусти `skeleton <tmpdir>` (идемпотентен: не трогает уже заполненные секции, но теперь досчитает `## Layout` из финального Stack).
+После ответа — ЗАМЕНИ весь контент секции `## Stack` целиком на подтверждённые оператором значения, не дописывай под старыми строками: `_extract_stack_value` берёт первое совпадение по ключу, и не удалённая строка `- backend: ...` до Stop&Ask молча победит новую — это нарушит Iron Law. Затем перезапусти `skeleton <tmpdir>` (идемпотентен для остальных секций, но `## Layout` теперь досчитает из финального Stack).
 
 ## Шаг 5 — swap + archive
 
@@ -61,11 +61,11 @@ ${CLAUDE_PLUGIN_ROOT}/skills/brief/scripts/package-brief.sh swap <tmpdir>
 ```
 ${CLAUDE_PLUGIN_ROOT}/skills/brief/scripts/package-brief.sh archive <src>...
 ```
-`<src>` — тот же SOURCE, что выбрали в шаге 2. `ok:false` с `data.conflicts` — Stop&Ask через `AskUserQuestion`: перезаписать / переименовать (переименуй конфликтующие файлы в SOURCE, повтори archive) / прервать.
+`<src>` — тот же SOURCE, что в шаге 2. `ok:false` с `data.conflicts` — Stop&Ask через `AskUserQuestion`: перезаписать / переименовать (переименуй конфликты в SOURCE, повтори archive) / прервать.
 
 ## Шаг 6 — git
 
-Нет репозитория (`git rev-parse --git-dir` падает) — Stop&Ask: «git init?» (да → `git init`, проверь `user.name`/`user.email`, при пустых — попроси настроить и остановись; нет → SKIP, шаг 8 не коммитит, оператор сделает это сам позже).
+Нет репозитория (`git rev-parse --git-dir` падает) — Stop&Ask: «git init?» (да → `git init`, проверь `user.name`/`user.email`, пустые — попроси настроить и остановись; нет → SKIP, шаг 8 не коммитит, оператор сделает это сам).
 
 ## Шаг 7 — state
 
@@ -82,7 +82,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh set phase brief-done
 ```
 ${CLAUDE_PLUGIN_ROOT}/lib/finalize.sh brief <msg-file>
 ```
-где `<msg-file>` содержит первой строкой `chore: package project brief`. Коммитит только `project_brief` + `project_brief.raw` — `state.json` в этот коммит не входит (закоммитит mvp:clarify).
+`<msg-file>` первой строкой содержит `chore: package project brief`. Коммитит только `project_brief` + `project_brief.raw` — `state.json` в коммит не входит (закоммитит mvp:clarify).
 
 ## Recreate существующего brief
 
