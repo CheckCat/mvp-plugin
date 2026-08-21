@@ -66,11 +66,14 @@
 //    it is a bare sha — and park()'s `git checkout/restore/clean` reset line
 //    produces no JSON either (often no stdout at all). relayLine(cmd) is the
 //    primitive: dispatch a haiku relay agent, return the raw last-stdout-line
-//    string, no parsing. relay(cmd) wraps relayLine with JSON.parse (retried
-//    once by default — see design note 12 for when it is NOT retried), for
-//    the lib-script contract calls. baseSha and park()'s reset both use
-//    relayLine directly — using relay() on either was a CRITICAL bug (fix
-//    round): JSON.parse("") throws on every single park() call.
+//    string, no parsing. relay(cmd) dispatches a SEPARATE structured-schema
+//    relay call (see design note 19 — NOT a wrapper around relayLine as of
+//    the fix round) for the lib-script contract calls, retried once by
+//    default (see design note 12 for when it is NOT retried). baseSha and
+//    park()'s reset both use relayLine directly — using relay() on either
+//    was a CRITICAL bug (fix round): JSON.parse("") threw on every single
+//    park() call (relay() parsed JSON at that time — see design note 19 for
+//    why it no longer does).
 //
 // 3. Template self-read prompts. This workflow never reads agents/*.md
 //    itself (no FS access). Each dispatch prompt instead tells the agent to
@@ -151,8 +154,9 @@
 //     argument, which since the final-review round is a SINGLE path — the
 //     task's boundary (design note 17b) — not a list.
 //
-// 12. relay() retryability (fix round, RULED): a JSON-parse-failure retry is
-//     safe only for read-only or overwrite-idempotent commands (plan-io.mjs
+// 12. relay() retryability (fix round, RULED): a malformed/null structured-
+//     result retry (JSON-parse-failure retry, pre-design-note-19) is safe
+//     only for read-only or overwrite-idempotent commands (plan-io.mjs
 //     next/validate-task.sh/review-package.sh/plan-io.mjs set-status — a
 //     second run produces the same end state). It is NOT safe for commands
 //     that APPEND or MUTATE-ONCE state: `apply-patches.py --stage` (a
@@ -306,6 +310,57 @@
 //        validate-task.sh `--files` (that is what produces the hint in the
 //        first place) and is still what plan.json holds; nothing patches
 //        plan.json at runtime.
+//
+// 19. relay() TRANSPORT (fix round, empirical — live build smoke, task 002).
+//     relay() used to be relayLine() + JSON.parse(): the relay agent copied
+//     the target command's last stdout line into a SEPARATE {"line": "..."}
+//     JSON envelope (string-in-string), and this file re-parsed that string
+//     as JSON. On task 002 the validate-task.sh output line was ~1.5KB of
+//     JSON containing nested `\n` escapes inside `data.violations[].detail`
+//     (Russian text, long file lists) — the relay agent's own re-escaping of
+//     that string into ITS {"line": ...} reply corrupted the escapes, and
+//     JSON.parse(line) threw `Expected '}'` after the one built-in retry,
+//     halting the whole run with `halt:'error'`. This was exactly the
+//     spec's flagged risk ("I/O-реле исказит однострочный JSON") —
+//     string-in-string transport was the weak link, not the target
+//     command's own output.
+//     Fix: relay() (the JSON-parsing variant only — relayLine() is
+//     unchanged, still used for genuinely non-JSON output: `git rev-parse
+//     HEAD`, park()'s reset line) now gives the dispatched agent the
+//     CONTRACT schema directly (RELAY_RESULT_SCHEMA — {ok, reason, hint,
+//     data}) instead of the generic {line:string} envelope, and tells it to
+//     parse the command's last stdout line as JSON and return THAT object
+//     via structured output. The platform validates the shape and hands
+//     back an already-parsed OBJECT — there is no second JSON string for
+//     this file to re-escape or re-parse, so the double-escaping failure
+//     mode is structurally impossible now, not just less likely.
+//     Schema looseness, deliberate: `ok` is the only field with `required`
+//     and a strict `type: 'boolean'` — it is the one field every call site
+//     actually branches on (`if (!val.ok)`, `if (!fin.ok)`, etc.).
+//     `reason`/`hint`/`data` are left as permissive `{}` (no `type`
+//     constraint) rather than `type: ['string','null']` / `type:
+//     ['object','null']` union arrays: this sandbox's agent() schema hook is
+//     not documented anywhere in this file's ambient-hooks contract (top of
+//     file), and RELAY_SCHEMA (relayLine's schema, design note 2) only ever
+//     exercised single, non-union `type` values before this change —
+//     pushing a not-yet-proven union-type form onto the FIRST union-typed
+//     schema this file gives the hook risked trading one transport failure
+//     for a schema-validation failure with the identical symptom (an
+//     unusable relay result). Permissive fields cost nothing here: every
+//     call site already reads `reason`/`hint`/`data` defensively (`||`,
+//     `(val.data && val.data.violations) || []`, etc.), so an unconstrained
+//     value flowing through is not a new failure mode. If a future round
+//     confirms union `type` arrays are safe on this hook, tightening
+//     `reason`/`hint`/`data` to the commented-out strict forms is a
+//     schema-only change, no call-site impact.
+//     Retry/null-guard semantics are UNCHANGED from the old relay(): a
+//     missing/malformed result (here: `out` is null/undefined — a dead
+//     relay agent — OR `out.ok` is not a boolean, the one shape check this
+//     file still performs) gets ONE retry when `opts.retryable` is not
+//     `false` (design note 12), else throws immediately — surfacing as
+//     `halt:'error'` via design note 9. relayLine() and RELAY_SCHEMA (the
+//     {line:string} envelope) are untouched — still used exactly as design
+//     note 2 describes for non-JSON commands.
 
 export const meta = {
   name: 'mvp-build',
@@ -388,32 +443,55 @@ async function relayLine(cmd, opts = {}) {
   return out.line;
 }
 
-// relay(cmd, opts) -> JSON.parse(relayLine(cmd, opts)). For the lib scripts
-// that always emit the {ok,reason,hint,data} contract on one stdout line.
-// `opts.retryable` (default true) gates whether a parse failure gets one
-// retry — see design note 12: append/mutate-once commands pass
-// `retryable: false` and fail immediately instead of risking a duplicate
-// side effect.
+// RELAY_RESULT_SCHEMA: the {ok,reason,hint,data} contract every lib/*.{mjs,
+// sh,py} script emits on its last stdout line (see design note 19 for why
+// this is given to the agent directly instead of a {line:string} envelope,
+// and why reason/hint/data are deliberately left permissive rather than
+// `type: ['string','null']` / `type: ['object','null']` union forms).
+const RELAY_RESULT_SCHEMA = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    reason: {},
+    hint: {},
+    data: {},
+  },
+  required: ['ok'],
+  additionalProperties: true,
+};
+
+// relay(cmd, opts) -> the platform-validated {ok,reason,hint,data} object,
+// straight from agent()'s structured output — no JSON.parse layer (design
+// note 19). For the lib scripts that always emit that contract on one
+// stdout line. `opts.retryable` (default true) gates whether a null/
+// malformed structured result (missing/non-boolean `ok`) gets one retry —
+// see design note 12: append/mutate-once commands pass `retryable: false`
+// and fail immediately instead of risking a duplicate side effect.
 async function relay(cmd, opts = {}) {
   const retryable = opts.retryable !== false;
-  let line = await relayLine(cmd, opts);
-  try {
-    return JSON.parse(line);
-  } catch (e1) {
-    if (!retryable) {
-      throw new Error(
-        `relay: could not parse JSON stdout (non-retryable command, no second attempt). cmd=${cmd} line=${JSON.stringify(line)} error=${e1 && e1.message}`,
-      );
-    }
-    line = await relayLine(cmd, opts);
-    try {
-      return JSON.parse(line);
-    } catch (e2) {
-      throw new Error(
-        `relay: could not parse JSON stdout after 1 retry. cmd=${cmd} line=${JSON.stringify(line)} error=${e2 && e2.message}`,
-      );
-    }
+  const fullCmd = withCwd(cmd);
+  const prompt = `Run exactly this command via Bash from the current project root:\n${fullCmd}\nParse the LAST line of stdout as JSON and return that object via your structured output — copy every field verbatim (ok, reason, hint, data). Do not summarize, do not add fields of your own, do not run anything else.`;
+  const callOpts = {
+    model: 'haiku',
+    effort: 'low',
+    schema: RELAY_RESULT_SCHEMA,
+    label: opts.label || cmd,
+    phase: opts.phase,
+  };
+
+  let out = await agent(prompt, callOpts);
+  if (out && typeof out.ok === 'boolean') return out;
+
+  if (!retryable) {
+    throw new Error(
+      `relay: agent did not return a valid {ok:boolean,...} structured result (non-retryable command, no second attempt). cmd=${fullCmd} out=${JSON.stringify(out)}`,
+    );
   }
+  out = await agent(prompt, callOpts);
+  if (out && typeof out.ok === 'boolean') return out;
+  throw new Error(
+    `relay: agent did not return a valid {ok:boolean,...} structured result after 1 retry. cmd=${fullCmd} out=${JSON.stringify(out)}`,
+  );
 }
 
 // --- agent text dispatch -------------------------------------------------------
