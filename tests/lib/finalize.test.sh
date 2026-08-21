@@ -36,11 +36,21 @@ write_msg() {
 }
 
 # run_finalize <projectdir> <arg...> -> sets F_OUT F_EXIT
+# Also asserts, per invocation (not just once at the end), that stdout is
+# exactly one line of JSON — every call site gets this check, not just the
+# last one (a `for out in "$F_OUT"` loop after all calls would silently only
+# re-check the final invocation's output).
 run_finalize() {
   local dir="$1"
   shift
   F_OUT="$(cd "$dir" && "$finalize" "$@" 2>/tmp/mvp-finalize-test-err)"
   F_EXIT=$?
+  local lines
+  lines="$(printf '%s' "$F_OUT" | wc -l | tr -d ' ')"
+  if [ "$lines" != "0" ]; then
+    echo "FAIL: (json) output is not single-line for args [$*]: $F_OUT" >&2
+    fail=1
+  fi
 }
 
 head_sha() { # <dir> -> HEAD sha or "none"
@@ -236,12 +246,5 @@ echo '# plan' >"$d_plan/PROJECT_PLAN.md"
 write_msg "$d_plan/msg.txt" "chore: plan scope"
 run_finalize "$d_plan" plan msg.txt
 assert_eq "(preset plan) exit code" "0" "$F_EXIT"
-
-# --- every output line is valid single-line JSON -----------------------------
-
-for out in "$F_OUT"; do
-  lines="$(printf '%s' "$out" | wc -l | tr -d ' ')"
-  assert_eq "(json) output is single line" "0" "$lines"
-done
 
 exit $fail

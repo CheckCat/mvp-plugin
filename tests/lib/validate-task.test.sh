@@ -47,11 +47,21 @@ write_ci_mirror() { # <dir> <line1> [<line2> ...] -- writes .claude/state/ci-mir
 }
 
 # run_vt <projectdir> <arg...> -> sets VT_OUT VT_EXIT
+# Also asserts, per invocation (not just once at the end), that stdout is
+# exactly one line of JSON — every call site gets this check, not just the
+# last one (a `for out in "$VT_OUT"` loop after all calls would silently
+# only re-check the final invocation's output).
 run_vt() {
   local dir="$1"
   shift
   VT_OUT="$(cd "$dir" && "$vt" "$@" 2>/tmp/mvp-vt-test-err)"
   VT_EXIT=$?
+  local lines
+  lines="$(printf '%s' "$VT_OUT" | wc -l | tr -d ' ')"
+  if [ "$lines" != "0" ]; then
+    echo "FAIL: (json) output is not single-line for args [$*]: $VT_OUT" >&2
+    fail=1
+  fi
 }
 
 violations_of_check() { # <json> <check> -> newline-separated details for that check
@@ -219,12 +229,5 @@ d_arg3="$(new_git_repo)"
 run_vt "$d_arg3" 001 --boundary app
 assert_eq "(argv) missing --files exit code" "1" "$VT_EXIT"
 assert_eq "(argv) missing --files ok:false" "False" "$(json_field "$VT_OUT" 'd["ok"]')"
-
-# --- every output line is valid single-line JSON -----------------------------
-
-for out in "$VT_OUT"; do
-  lines="$(printf '%s' "$out" | wc -l | tr -d ' ')"
-  assert_eq "(json) output is single line" "0" "$lines"
-done
 
 exit $fail

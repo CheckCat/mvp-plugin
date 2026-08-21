@@ -31,11 +31,21 @@ new_git_repo() {
 }
 
 # run_rp <projectdir> <arg...> -> sets RP_OUT RP_EXIT
+# Also asserts, per invocation (not just once at the end), that stdout is
+# exactly one line of JSON — every call site gets this check, not just the
+# last one (a `for out in "$RP_OUT"` loop after all calls would silently
+# only re-check the final invocation's output).
 run_rp() {
   local dir="$1"
   shift
   RP_OUT="$(cd "$dir" && "$rp" "$@" 2>/tmp/mvp-rp-test-err)"
   RP_EXIT=$?
+  local lines
+  lines="$(printf '%s' "$RP_OUT" | wc -l | tr -d ' ')"
+  if [ "$lines" != "0" ]; then
+    echo "FAIL: (json) output is not single-line for args [$*]: $RP_OUT" >&2
+    fail=1
+  fi
 }
 
 # --- (a) two commits base..HEAD -> file has both subjects + diffstat + diff --
@@ -121,12 +131,5 @@ d_arg2="$(new_git_repo)"
 run_rp "$d_arg2" 001
 assert_eq "(argv) missing --base exit code" "1" "$RP_EXIT"
 assert_eq "(argv) missing --base ok:false" "False" "$(json_field "$RP_OUT" 'd["ok"]')"
-
-# --- every output line is valid single-line JSON ------------------------------
-
-for out in "$RP_OUT"; do
-  lines="$(printf '%s' "$out" | wc -l | tr -d ' ')"
-  assert_eq "(json) output is single line" "0" "$lines"
-done
 
 exit $fail
