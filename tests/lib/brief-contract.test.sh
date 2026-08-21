@@ -109,6 +109,17 @@ if ! echo "$out_d" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert
   fail=1
 fi
 
+# --- (d2) validate_stack with a quote-containing value -> exit 1 + valid JSON
+
+out_d2="$(validate_stack 'we"ird' react docker-dokploy postgresql)"
+rc_d2=$?
+assert_eq "(d2) validate_stack quote-containing backend exit code" "1" "$rc_d2"
+if ! echo "$out_d2" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["ok"] is False' 2>/tmp/mvp-bc-test-err; then
+  echo "FAIL: (d2) validate_stack output is not valid ok:false JSON: $out_d2" >&2
+  cat /tmp/mvp-bc-test-err >&2
+  fail=1
+fi
+
 # --- (e) layout_for_stack ----------------------------------------------------
 
 assert_eq "layout_for_stack fastapi react 3" "services" "$(layout_for_stack fastapi react 3)"

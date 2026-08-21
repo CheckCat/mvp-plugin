@@ -105,7 +105,9 @@ validate_stack() { # $1 backend $2 frontend $3 deploy $4 db csv
   case " $ALLOWED_DEPLOY "   in *" $3 "*) ;; *) errs+=("deploy '$3' not in [$ALLOWED_DEPLOY]");; esac
   case ",$4," in *,postgresql,*) ;; *) errs+=("db must contain postgresql");; esac
   if [ ${#errs[@]} -gt 0 ]; then
-    printf '{"ok":false,"reason":"stack not allowed","hint":"%s","data":null}\n' "${errs[*]}"; return 1
+    local hint="${errs[*]}"
+    python3 -c 'import json,sys;print(json.dumps({"ok":False,"reason":"stack not allowed","hint":sys.argv[1],"data":None}))' "$hint"
+    return 1
   fi
   printf '{"ok":true,"reason":null,"hint":null,"data":null}\n'
 }
