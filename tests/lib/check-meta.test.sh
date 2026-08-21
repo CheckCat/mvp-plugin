@@ -191,6 +191,32 @@ run_cm "$d_e"
 assert_eq "(e) exit code" "0" "$CM_EXIT"
 assert_eq "(e) ok:true" "True" "$(json_field "$CM_OUT" 'd["ok"]')"
 
+# --- (e2) forbidden edge ONLY inside a %% comment, plus a clean real edge ---
+# -> ok:true (regression: a commented-out edge must never trigger a violation)
+
+d_e2="$(new_project_dir)"
+write_valid_claude_md "$d_e2"
+mkdir -p "$d_e2/.claude/state"
+cat >"$d_e2/.claude/state/invariants.md" <<'EOF'
+FORBIDDEN_EDGE: integration-* --> DB
+EOF
+cat >"$d_e2/ARCHITECTURE.md" <<'EOF'
+# Architecture
+
+```mermaid
+graph TD
+  %% integration-tiktok --> DB (forbidden, kept here only as a comment)
+  integration-tiktok --> queue
+  api --> DB
+```
+EOF
+
+run_cm "$d_e2"
+
+assert_eq "(e2) exit code" "0" "$CM_EXIT"
+assert_eq "(e2) ok:true" "True" "$(json_field "$CM_OUT" 'd["ok"]')"
+assert_eq "(e2) no violations" "0" "$(json_field "$CM_OUT" 'len(d["data"]["violations"])')"
+
 # --- (f) argv guard: unexpected argument -> ok:false, exit 1 ----------------
 
 d_f="$(new_project_dir)"

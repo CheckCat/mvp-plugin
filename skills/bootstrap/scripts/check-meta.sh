@@ -50,7 +50,9 @@
 # "A -.-> B", "A ==> B", each side optionally decorated with a node shape
 # ("id[Label]", "id(Label)", "id{Label}"). This is a lint subset, not a full
 # mermaid parser — good enough to catch the FORBIDDEN_EDGE class of mistake
-# without pulling in a JS mermaid dependency.
+# without pulling in a JS mermaid dependency. Lines matching "^\s*%%" (mermaid
+# comments) are skipped entirely before edge-matching — an edge mentioned only
+# inside a comment must never trigger a violation.
 
 set -u
 
@@ -160,9 +162,13 @@ else:
         m = shape_re.match(token)
         return m.group(1) if m else token
 
+    comment_re = re.compile(r"^\s*%%")
+
     edges = []
     for block in mermaid_blocks:
         for line in block.splitlines():
+            if comment_re.match(line):
+                continue
             m = edge_re.search(line)
             if m:
                 edges.append((bare_id(m.group(1)), bare_id(m.group(2))))
