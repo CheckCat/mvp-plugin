@@ -35,13 +35,19 @@ for v in d["data"]["violations"]:
 
 # Every fixture gets a VALID .claude/state/ci-mirror.sh by default — it is a
 # check-meta gate now (a real bootstrap always has one by Step 3.2), so the
-# cases that are about CLAUDE.md/ARCHITECTURE.md must not trip over it. The
-# ci-mirror cases below deliberately remove/corrupt it.
+# cases that are about CLAUDE.md/ARCHITECTURE.md must not trip over it.
+# check-meta.sh now EXECUTES this mirror (not just `bash -n`), so the default
+# must be guard-safe on the empty fixture tree (no pyproject.toml here) —
+# same existence-guard pattern as skills/bootstrap/SKILL.md Step 3.2's
+# fastapi block. An unguarded `uv run ruff check .` would fail for real here
+# (no pyproject.toml / no ruff installed) and spuriously trip every case
+# below with ci-mirror-exec. The ci-mirror cases further down deliberately
+# remove/corrupt/unguard it to exercise that gate on purpose.
 new_project_dir() {
   local d
   d="$(mktemp -d -p "$tmproot")"
   mkdir -p "$d/.claude/state"
-  printf 'uv run ruff check .\nuv run pytest\n' >"$d/.claude/state/ci-mirror.sh"
+  printf 'if [ -f pyproject.toml ]; then uv run ruff check .; fi\nif [ -f pyproject.toml ]; then uv run pytest; fi\n' >"$d/.claude/state/ci-mirror.sh"
   printf '%s' "$d"
 }
 
@@ -302,5 +308,41 @@ if [ -z "$(violations_of_check "$CM_OUT" ci-mirror-syntax)" ]; then
   echo "FAIL: (i) expected ci-mirror-syntax violation: $CM_OUT" >&2
   fail=1
 fi
+
+# --- (j) ci-mirror.sh syntax-valid but unguarded, fails on empty tree -------
+# -> violation ci-mirror-exec. This is the R2 regression: `bash -n` alone
+# lets a semantically-broken mirror (references a precondition that doesn't
+# exist yet) through; check-meta.sh must now actually run it.
+
+d_j="$(new_project_dir)"
+write_valid_claude_md "$d_j"
+write_valid_architecture_md "$d_j"
+printf 'ls no-such-dir\n' >"$d_j/.claude/state/ci-mirror.sh"
+
+run_cm "$d_j"
+
+assert_eq "(j) exit code" "1" "$CM_EXIT"
+assert_eq "(j) ok:false" "False" "$(json_field "$CM_OUT" 'd["ok"]')"
+if [ -z "$(violations_of_check "$CM_OUT" ci-mirror-exec)" ]; then
+  echo "FAIL: (j) expected ci-mirror-exec violation: $CM_OUT" >&2
+  fail=1
+fi
+
+# --- (k) ci-mirror.sh fully guarded on an empty tree -> ok:true -------------
+# Companion to (j): a mirror that guards every command with its own
+# existence precondition (the pattern skills/bootstrap/SKILL.md Step 3.2
+# mandates) must skip everything and exit 0 on a pre-code tree — the gate
+# must not punish correctly-guarded mirrors.
+
+d_k="$(new_project_dir)"
+write_valid_claude_md "$d_k"
+write_valid_architecture_md "$d_k"
+printf 'if [ -d no-such-dir ]; then ls no-such-dir; fi\nif [ -f pyproject.toml ]; then uv run pytest; fi\n' >"$d_k/.claude/state/ci-mirror.sh"
+
+run_cm "$d_k"
+
+assert_eq "(k) exit code" "0" "$CM_EXIT"
+assert_eq "(k) ok:true" "True" "$(json_field "$CM_OUT" 'd["ok"]')"
+assert_eq "(k) no violations" "0" "$(json_field "$CM_OUT" 'len(d["data"]["violations"])')"
 
 exit $fail

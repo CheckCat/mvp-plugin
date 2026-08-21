@@ -55,19 +55,27 @@ FORBIDDEN_EDGE: <src-pattern> --> <dst-pattern>
 
 **3.2. `ci-mirror.sh`** — детерминированная генерация из `## Stack` brief'а. Читай `backend`/`frontend` ТЕМ ЖЕ способом, что `_extract_stack_value` в `skills/brief/scripts/package-brief.sh` (строки ~166–188: awk по `## Stack`, `- key: value`, case-insensitive key, первое совпадение побеждает) — replicate этот awk один в один для `backend` и для `frontend`, не изобретай новый формат парсинга.
 
-Маппинг стек → команды (пишутся в `.claude/state/ci-mirror.sh`, по одной команде на строку — `validate-task.sh` гоняет их через `bash -e`, первая ошибка обрывает остальные). Команды со скоупом на ещё не существующие каталоги оборачиваются в existence-guard — первая задача DAG обязана проходить ci-mirror на пустом дереве:
+Маппинг стек → команды (пишутся в `.claude/state/ci-mirror.sh`, по одной команде на строку — `validate-task.sh` гоняет их через `bash -e`, первая ошибка обрывает остальные). Каждая команда guarded своим предусловием: на пустом дереве зеркало обязано выходить 0 — это исполняемый гейт check-meta (Шаг 6 реально запускает `ci-mirror.sh`, не только `bash -n`).
 
-| backend | команды |
-|---|---|
-| `fastapi` | `uv sync --frozen` / `uv run ruff check .` / `uv run ruff format --check .` / `if [ -d services ]; then uv run mypy services; fi` / `uv run pytest \|\| [ $? -eq 5 ]` |
-| `nestjs` | `pnpm install --frozen-lockfile` / `pnpm turbo lint` / `pnpm turbo build` / `pnpm turbo test` |
+`backend=fastapi`:
+```
+if [ -f pyproject.toml ]; then uv sync --frozen; fi
+if [ -f pyproject.toml ]; then uv run ruff check .; fi
+if [ -f pyproject.toml ]; then uv run ruff format --check .; fi
+if [ -n "$(find services -name node_modules -prune -o -name '*.py' -type f -print -quit 2>/dev/null)" ]; then uv run mypy services; fi
+if [ -f pyproject.toml ]; then uv run pytest || [ $? -eq 5 ]; fi
+```
+Exit 5 значит «no tests collected» — ожидаемо на greenfield-дереве, не валит ci-mirror; любой другой ненулевой код по-прежнему валит.
 
-`uv run pytest \|\| [ $? -eq 5 ]` — exit 5 значит «no tests collected», это ожидаемо на greenfield-дереве и не должно валить ci-mirror; любой другой ненулевой код (реальный failure) по-прежнему валит.
+`backend=nestjs`:
+```
+if [ -f package.json ]; then pnpm install --frozen-lockfile; fi
+if [ -f package.json ]; then pnpm turbo lint; fi
+if [ -f package.json ]; then pnpm turbo build; fi
+if [ -f package.json ]; then pnpm turbo test; fi
+```
 
-nestjs-блок не оборачивается: `pnpm turbo *` команды идут через workspace-root (`layout=packages`), который существует с первого коммита — там нет скоупа на каталог, создаваемый более поздней задачей.
-
-`frontend` (`react`/`nextjs`) **только когда `backend=fastapi`** — nestjs уже покрывает frontend через тот же pnpm/turbo workspace (`layout=packages`, см. `lib/brief-contract.sh:layout_for_stack`), отдельных команд не нужно:
-
+`frontend` (`react`/`nextjs`) **только когда `backend=fastapi`** — nestjs уже покрывает frontend через тот же pnpm/turbo workspace (`layout=packages`, см. `lib/brief-contract.sh:layout_for_stack`), отдельных команд не нужно; guard'ы `[ -d services/frontend ]` уже на месте:
 ```
 if [ -d services/frontend ]; then npm --prefix services/frontend ci; fi
 if [ -d services/frontend ]; then npm --prefix services/frontend run lint; fi
@@ -100,7 +108,7 @@ ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/verify-agents-drift.sh
 ```
 ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/check-meta.sh
 ```
-Три гейта: `CLAUDE.md` (есть, ≤150 строк, обязательные секции), `ARCHITECTURE.md` (есть, ни одно ребро не нарушает `FORBIDDEN_EDGE`), `.claude/state/ci-mirror.sh` (есть, непустой, проходит `bash -n`). `ok:false` → почини соответствующий файл по `data.violations`, повтори. Нарушение `ci-mirror-*` — это возврат к Шагу 3.2, а не к правке `CLAUDE.md`: этот файл дальше гоняет `validate-task.sh` на каждой задаче build'а. После 2 неудачных попыток подряд — Stop&Ask, не третья попытка молча.
+Три гейта: `CLAUDE.md` (есть, ≤150 строк, обязательные секции), `ARCHITECTURE.md` (есть, ни одно ребро не нарушает `FORBIDDEN_EDGE`), `.claude/state/ci-mirror.sh` (есть, непустой, проходит `bash -n` И реально выполняется — `bash -e`, exit 0 на текущем дереве). `ok:false` → почини соответствующий файл по `data.violations`, повтори. Нарушение `ci-mirror-*` — это возврат к Шагу 3.2, а не к правке `CLAUDE.md`: этот файл дальше гоняет `validate-task.sh` на каждой задаче build'а. После 2 неудачных попыток подряд — Stop&Ask, не третья попытка молча.
 
 ## Шаг 7 — phase + finalize
 

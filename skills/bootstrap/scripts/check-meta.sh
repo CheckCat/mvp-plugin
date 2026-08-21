@@ -29,14 +29,16 @@
 #                              script (no rules to check yet is a valid
 #                              state before Step 3 of mvp:bootstrap writes
 #                              it) — it just means zero rules are checked.
-#   6. ci-mirror-missing / ci-mirror-empty / ci-mirror-syntax —
-#                              .claude/state/ci-mirror.sh must exist, contain
-#                              something other than whitespace/comments, and
-#                              pass `bash -n`. This is the ONLY other file
-#                              mvp:bootstrap generates that a later stage
-#                              blindly executes: lib/validate-task.sh runs it
-#                              as the single source of lint/test commands for
-#                              EVERY build task, so a missing/empty/malformed
+#   6. ci-mirror-missing / ci-mirror-empty / ci-mirror-syntax /
+#      ci-mirror-exec        — .claude/state/ci-mirror.sh must exist, contain
+#                              something other than whitespace/comments, pass
+#                              `bash -n`, AND actually execute clean (`bash -e
+#                              .claude/state/ci-mirror.sh`, exit 0). This is
+#                              the ONLY other file mvp:bootstrap generates
+#                              that a later stage blindly executes:
+#                              lib/validate-task.sh runs it as the single
+#                              source of lint/test commands for EVERY build
+#                              task, so a missing/empty/malformed/failing
 #                              mirror turns into a `ci` violation on every
 #                              task of the run, long after bootstrap is
 #                              committed. Unlike --invariants, it is NOT
@@ -46,7 +48,16 @@
 #                              Path is fixed (.claude/state/ci-mirror.sh) —
 #                              validate-task.sh hardcodes the same literal,
 #                              so making it configurable here would only
-#                              allow the two to disagree.
+#                              allow the two to disagree. ci-mirror-exec is
+#                              the load-bearing addition: `bash -n` only
+#                              proves the file parses, not that its
+#                              preconditions hold. At bootstrap time the tree
+#                              is pre-code, so a correctly guarded mirror
+#                              (every command wrapped in an existence check)
+#                              skips everything and exits 0 fast; a mirror
+#                              referencing a missing precondition unguarded
+#                              fails HERE instead of resurfacing as a `ci`
+#                              violation on build task 1.
 #
 # --- Required CLAUDE.md sections (documented mapping, see task-11 report) --
 # ## Стек     — matches project_brief/technical_solutions.md's "## Stack"
@@ -226,10 +237,16 @@ else:
                 })
 
 # --- ci-mirror.sh -------------------------------------------------------------
-# Three distinct failure modes, deliberately not collapsed into one check name:
+# Four distinct failure modes, deliberately not collapsed into one check name:
 # "you never wrote it" (Step 3 skipped), "you wrote an empty/comment-only stub"
 # (the mirror would exit 0 and validate every task as green without running
-# anything), and "you wrote something bash cannot parse" (every task fails ci).
+# anything), "you wrote something bash cannot parse" (every task fails ci),
+# and "it parses but blows up when run" — e.g. an unguarded command that
+# assumes a directory/tool exists on the pre-code bootstrap tree. `bash -n`
+# only checks mode 3; mode 4 is only observable by actually running the
+# mirror, which is exactly what the ci-mirror-exec check below does — this
+# is the fix for letting a semantically-broken mirror (syntax-valid,
+# runtime-broken) slide through bootstrap and only blow up on build task 1.
 
 if not os.path.isfile(ci_mirror):
     violations.append({"check": "ci-mirror-missing", "detail": f"not found: {ci_mirror}"})
@@ -255,6 +272,24 @@ else:
                 "check": "ci-mirror-syntax",
                 "detail": f"bash -n failed for {ci_mirror}: {detail}",
             })
+        else:
+            # Syntax is valid — now actually run it. On a pre-code bootstrap
+            # tree a correctly guarded mirror (every command wrapped in its
+            # own existence precondition) exits 0 fast here; an unguarded
+            # command referencing a missing precondition fails HERE instead
+            # of resurfacing as a `ci` violation on the first build task.
+            exec_proc = subprocess.run(
+                ["bash", "-e", ci_mirror],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            )
+            if exec_proc.returncode != 0:
+                out_lines = exec_proc.stdout.decode("utf-8", "replace").splitlines()
+                tail = out_lines[-20:] if out_lines else []
+                detail = "\n".join(tail) if tail else f"{ci_mirror} exited {exec_proc.returncode} with no output"
+                violations.append({
+                    "check": "ci-mirror-exec",
+                    "detail": detail,
+                })
 
 ok = len(violations) == 0
 reason = None if ok else f"{len(violations)} meta violation(s)"
