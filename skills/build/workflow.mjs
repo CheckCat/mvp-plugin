@@ -25,26 +25,38 @@
 // Design decisions (documented per task-14 instructions, updated by a
 // controller review round — read before touching the ladders below):
 //
-// 1. ENTRY CONTRACT (fix round, CRITICAL). The Workflow tool evaluates this
-//    module's BODY directly — there is no separate "call the exported entry
-//    function" step. The previous `export default async function run() {...}`
-//    was DEAD CODE: nothing in the documented hook contract ever invokes a
-//    default-exported function, so the whole task loop silently never ran.
-//    Fixed by making the loop a top-level-await IIFE whose settled value
-//    becomes the module's default export: `export default await (async () =>
-//    {...})();`. This means the loop genuinely executes as a side effect of
-//    the harness importing/evaluating this file (top-level await forces the
-//    IIFE to finish before module evaluation completes), and the resulting
-//    `{halt, ...}` object is readable as this module's default export the
-//    moment evaluation settles — no invocation step required, symmetric with
-//    how `meta` is read as a plain export. `args`/`agent`/`log`/`budget` are
-//    read as ambient bindings inside the IIFE, exactly as before. This is
-//    still the single biggest inferred-not-verified assumption in this file
-//    (no Workflow-tool runtime spec exists anywhere in this repo) — flagged
-//    again for the controller to confirm at the Step-3 dry-run. The whole
-//    IIFE body is wrapped in one try/catch (design note 9) so any internal
-//    `throw` becomes a `{halt:'error', detail}` return instead of an
-//    unhandled rejection.
+// 1. ENTRY CONTRACT — now AUTHORITATIVE (round 3, R18 resolved by an
+//    empirical controller test, not inference). The Workflow runtime
+//    extracts the `export const meta = {...}` block above via its own
+//    parsing, then wraps EVERYTHING AFTER IT in its own `async function`
+//    before evaluating it. Two direct, load-bearing consequences, confirmed
+//    by the runner actually failing on the wrong shape:
+//      - `export default ...` is ILLEGAL below this point — the runner's
+//        wrapper is a plain async function body, not an ES module, so an
+//        `export` statement inside it is a SyntaxError (this is exactly how
+//        round 1's `export default async function run() {...}` — dead code,
+//        never invoked — and round 2's
+//        `export default await (async () => {...})();` — syntactically
+//        valid ESM, but wrong shape for THIS runner — both failed: the
+//        runner's own parse step choked on `export` appearing after the
+//        meta block).
+//      - A plain top-level `return` IS legal below this point, and is
+//        exactly how this script hands its result back — it returns from
+//        the runner's implicit wrapper function, the same way a plain
+//        `return` at the top of any CommonJS module body returns from
+//        Node's implicit module-wrapper function. This is why `node --check`
+//        on this file (which validates it as a standalone ES module, where
+//        top-level `return` is always illegal) is EXPECTED to fail post-fix
+//        — it is checking the wrong contract. See the file-level syntax
+//        sanity check below (grep "ASYNCFUNCTION SANITY CHECK") for the
+//        check that actually mirrors the runner's real parsing.
+//    `args`/`agent`/`log`/`budget`/etc. are ambient bindings inside that
+//    implicit wrapper, exactly as assumed since round 1. The entry point
+//    below is therefore plain top-level statements (no IIFE, no exported
+//    function), one try/catch (design note 9) ending in `return
+//    withRunLabels(result)` at every exit — never a bare `return result`,
+//    since there is no single outer point left to merge run labels at once
+//    (design note 13).
 //
 // 2. relay() vs relayLine(). The brief's relay() sketch assumes the
 //    underlying command's stdout is itself one line of JSON (true for every
@@ -154,13 +166,17 @@
 //     immediately on the first parse failure instead of trying again,
 //     surfacing as `{halt:'error', ...}` via design note 9.
 //
-// 13. Return-payload labeling (fix round): every returned outcome — every
-//     halt AND the ordinary-completion result — is stamped with
-//     `run_id`/`now` from `args`, merged on exactly once at the outermost
-//     return point, so the calling SKILL can label a ledger/blockers message
-//     with which run produced it without threading those two fields through
-//     every internal return site by hand. `project_root` (design note 14) is
-//     merged in at that same point, but only when it was actually provided.
+// 13. Return-payload labeling: every returned outcome — every halt AND the
+//     ordinary-completion result — is stamped with `run_id`/`now` from
+//     `args` via the shared `withRunLabels()` helper, so the calling SKILL
+//     can label a ledger/blockers message with which run produced it.
+//     `project_root` (design note 14) is included too, only when it was
+//     actually provided. Round 1/2 merged this in ONCE, at a single outer
+//     IIFE return point; round 3 (design note 1) removed that IIFE — the
+//     entry point is now plain top-level code with several `return` sites —
+//     so every one of those sites calls `return withRunLabels(...)`
+//     explicitly instead. `withRunLabels()` itself stays a single function,
+//     so the labeling logic is still defined exactly once.
 //
 // 14. project_root (round-2 fix, controller-discovered integration gap):
 //     workflow subagents (relay agents AND implementer/validator/reviewer/
@@ -832,58 +848,77 @@ function validateArgs(a) {
   return null;
 }
 
-// --- entry point ---------------------------------------------------------------
-//
-// Top-level-await IIFE, not an exported function (design note 1 — the
-// exported-function form was dead code, never invoked by anything). Its
-// settled value becomes this module's default export. The whole body is one
-// try/catch (design note 9): any internal throw becomes {halt:'error', ...}
-// instead of an unhandled rejection. `run_id`/`now` are stamped onto
-// whatever the inner logic returns at the single outer return point (design
-// note 13) so every outcome — halts included — carries run labeling.
-
-export default await (async () => {
-  const inner = await (async () => {
-    try {
-      const badArgs = validateArgs(args);
-      if (badArgs) return badArgs;
-
-      lib = `${args.plugin_root}/lib`;
-
-      const results = [];
-      let tasksDone = 0;
-
-      while (tasksDone < args.max_tasks) {
-        const nextCmd = `node "${lib}/plan-io.mjs" next${args.task_id ? ` --task "${args.task_id}"` : ''}`;
-        const adv = await relay(nextCmd, { phase: 'Advance', label: `advance-${tasksDone}` });
-        if (!adv.ok) {
-          throw new Error(`plan-io.mjs next failed: ${adv.reason || 'unknown'}`);
-        }
-        if (adv.data && adv.data.halt) {
-          // all-done | dag-stuck | interrupt | dirty-tree — propagate
-          // verbatim, the calling SKILL owns the halt-table dispatch.
-          return { halt: adv.data.halt, detail: adv.data.detail };
-        }
-
-        const outcome = await runOneTask(adv);
-        if (outcome.halt) return outcome; // park() propagates its stop-and-ask halt directly
-
-        results.push({ task_id: outcome.task_id, sha: outcome.sha, tokens_delta: outcome.tokens_delta, concerns: outcome.concerns });
-        tasksDone += 1;
-        if (args.task_id) break;
-      }
-
-      // Ordinary completion: the requested cap (--tasks N, or a single
-      // --task <id>) was reached with no ladder failure. halt: null — not
-      // part of the operator-attention halt vocabulary (design note 9).
-      return { halt: null, tasks_done: tasksDone, results };
-    } catch (e) {
-      log(`workflow error: ${e && e.stack ? e.stack : e}`);
-      return { halt: 'error', detail: e && e.message ? e.message : String(e) };
-    }
-  })();
-
+// withRunLabels(result) -> result, stamped with run_id/now (and project_root
+// when provided) from args. Called at every return site below, since (per
+// design note 1, round 3) there is no single outer wrapper to merge these in
+// once anymore — the runner supplies its own wrapper function, and this
+// script's body runs directly inside it.
+function withRunLabels(result) {
   const labels = { run_id: args?.run_id, now: args?.now };
   if (args?.project_root) labels.project_root = args.project_root;
-  return { ...inner, ...labels };
-})();
+  return { ...result, ...labels };
+}
+
+// ASYNCFUNCTION SANITY CHECK (round 3 — replaces `node --check` for this
+// file, see design note 1). `node --check` validates this file as a
+// standalone ES module, where a top-level `return` below is ALWAYS a
+// SyntaxError — but that is not the contract the real runner uses, so
+// `node --check` on this file is now EXPECTED to fail and is no longer part
+// of this task's verification. The check that actually mirrors the runner
+// (strip the `export const meta` block, wrap the rest as an AsyncFunction
+// body, confirm construction doesn't throw) is a one-liner, run from the
+// plugin repo root:
+//
+//   node -e "const src=require('fs').readFileSync('skills/build/workflow.mjs','utf8').replace(/^export const meta[\s\S]*?^}/m,''); new (Object.getPrototypeOf(async function(){}).constructor)('agent','parallel','pipeline','log','phase','args','budget','workflow', src)"
+//
+// A clean exit (no SyntaxError) means the runner's own parse step will
+// accept this file's shape.
+
+// --- entry point ---------------------------------------------------------------
+//
+// Plain top-level statements — NOT an IIFE, NOT an exported function (design
+// note 1, round 3 — see there for the full story). Ends in a top-level
+// `return`, which is legal here because the Workflow runtime extracts
+// `export const meta` above and wraps everything AFTER it in its own async
+// function before evaluating it — this script's body runs as that function's
+// body, not as a standalone ES module. One try/catch (design note 9): any
+// internal throw becomes {halt:'error', ...} instead of an unhandled
+// rejection/crash.
+
+try {
+  const badArgs = validateArgs(args);
+  if (badArgs) return withRunLabels(badArgs);
+
+  lib = `${args.plugin_root}/lib`;
+
+  const results = [];
+  let tasksDone = 0;
+
+  while (tasksDone < args.max_tasks) {
+    const nextCmd = `node "${lib}/plan-io.mjs" next${args.task_id ? ` --task "${args.task_id}"` : ''}`;
+    const adv = await relay(nextCmd, { phase: 'Advance', label: `advance-${tasksDone}` });
+    if (!adv.ok) {
+      throw new Error(`plan-io.mjs next failed: ${adv.reason || 'unknown'}`);
+    }
+    if (adv.data && adv.data.halt) {
+      // all-done | dag-stuck | interrupt | dirty-tree — propagate verbatim,
+      // the calling SKILL owns the halt-table dispatch.
+      return withRunLabels({ halt: adv.data.halt, detail: adv.data.detail });
+    }
+
+    const outcome = await runOneTask(adv);
+    if (outcome.halt) return withRunLabels(outcome); // park() propagates its stop-and-ask halt directly
+
+    results.push({ task_id: outcome.task_id, sha: outcome.sha, tokens_delta: outcome.tokens_delta, concerns: outcome.concerns });
+    tasksDone += 1;
+    if (args.task_id) break;
+  }
+
+  // Ordinary completion: the requested cap (--tasks N, or a single
+  // --task <id>) was reached with no ladder failure. halt: null — not part
+  // of the operator-attention halt vocabulary (design note 9).
+  return withRunLabels({ halt: null, tasks_done: tasksDone, results });
+} catch (e) {
+  log(`workflow error: ${e && e.stack ? e.stack : e}`);
+  return withRunLabels({ halt: 'error', detail: e && e.message ? e.message : String(e) });
+}
