@@ -162,6 +162,67 @@ else
   fi
 fi
 
+# --- (e) noise filter: lockfile name-only, .claude/state/** excluded, --------
+#     normal untracked source file still inlined in full
+# Regression for the post-smoke finding: task-002's real package was 1442
+# lines, ~60% noise, because (1) the script's own PRIOR output under
+# .claude/state/review/ was untracked at listing time and got inlined into
+# itself, and (2) package-lock.json (400+113 lines) was inlined whole.
+
+d_e="$(new_git_repo)"
+echo 'v1' >"$d_e/app.py"
+(cd "$d_e" && git add app.py && git commit -q -m "chore: root commit")
+BASE_E="$(cd "$d_e" && git rev-parse HEAD)"
+
+# untracked lockfile — must be named, never inlined
+echo '{"name": "whatever", "lockfileVersion": 3}' >"$d_e/package-lock.json"
+
+# untracked file under .claude/state/review/ — the script's own prior
+# output (or any other state artifact) — must not appear at all
+mkdir -p "$d_e/.claude/state/review"
+echo 'SHOULD-NEVER-APPEAR-IN-PACKAGE' >"$d_e/.claude/state/review/task-001.md"
+
+# normal untracked source file — must still be inlined in full, unchanged
+echo 'REGULAR-SOURCE-CONTENT' >"$d_e/handler.py"
+
+run_rp "$d_e" 002 --base "$BASE_E"
+
+assert_eq "(e) exit code" "0" "$RP_EXIT"
+assert_eq "(e) ok:true" "True" "$(json_field "$RP_OUT" 'd["ok"]')"
+PATH_E="$(json_field "$RP_OUT" 'd["data"]["path"]')"
+FULL_PATH_E="$d_e/$PATH_E"
+
+if [ ! -f "$FULL_PATH_E" ]; then
+  echo "FAIL: (e) review file not written: $FULL_PATH_E" >&2
+  fail=1
+else
+  CONTENT_E="$(cat "$FULL_PATH_E")"
+  if ! printf '%s' "$CONTENT_E" | grep -q "handler.py"; then
+    echo "FAIL: (e) normal untracked source file name missing" >&2
+    fail=1
+  fi
+  if ! printf '%s' "$CONTENT_E" | grep -q "REGULAR-SOURCE-CONTENT"; then
+    echo "FAIL: (e) normal untracked source file content missing (must be inlined)" >&2
+    fail=1
+  fi
+  if ! printf '%s' "$CONTENT_E" | grep -q "package-lock.json"; then
+    echo "FAIL: (e) lockfile name missing from package" >&2
+    fail=1
+  fi
+  if printf '%s' "$CONTENT_E" | grep -q "lockfileVersion"; then
+    echo "FAIL: (e) lockfile CONTENT leaked into package (must be name+size only)" >&2
+    fail=1
+  fi
+  if printf '%s' "$CONTENT_E" | grep -q "task-001.md"; then
+    echo "FAIL: (e) .claude/state/** file listed in package (must be excluded entirely)" >&2
+    fail=1
+  fi
+  if printf '%s' "$CONTENT_E" | grep -q "SHOULD-NEVER-APPEAR-IN-PACKAGE"; then
+    echo "FAIL: (e) .claude/state/** file content leaked into package" >&2
+    fail=1
+  fi
+fi
+
 # --- argv guard: missing task-id ----------------------------------------------
 
 d_arg1="$(new_git_repo)"

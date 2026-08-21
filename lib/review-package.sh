@@ -39,6 +39,19 @@
 #     heading, content capped at UNTRACKED_FILE_LINE_CAP lines with an
 #     explicit truncation note so a large generated file can't blow up the
 #     review package.
+#
+# NOISE FIX (post-smoke analysis, real task-002 artifact: 1442 lines, ~60%
+# noise): `git ls-files --others` runs BEFORE this script `mv`s its own
+# output into place, so a prior run's task-<id>.md under
+# .claude/state/review/ was untracked at listing time and got inlined into
+# ITS OWN package — briefs/reports/review are already handed to the
+# reviewer via explicit paths, so self-inclusion here is pure noise, not a
+# feature. Fixed by excluding .claude/state/** from the untracked listing
+# entirely. Separately, lock/generated files (package-lock.json and
+# friends) were being inlined whole — one such file alone was 400+113
+# lines in the smoke artifact. These are never hand-reviewed diffs a human
+# needs to read; only their NAME + size matters (did a lockfile change at
+# all). Fixed by listing those by name+size only, never inlining content.
 
 set -u
 
@@ -134,20 +147,53 @@ trap 'rm -f "$TMP_OUT"' EXIT
 
 # Untracked files, NUL-delimited (filenames may contain spaces/special
 # chars) so paths cross the bash/python boundary intact — same pattern as
-# lib/validate-task.sh's boundary check. Each file's content is inlined
-# (this is new work the implementer created; no `git diff` ever shows it),
-# capped at UNTRACKED_FILE_LINE_CAP lines per file with a truncation note.
+# lib/validate-task.sh's boundary check. Two exceptions to "inline it all":
+#   - .claude/state/** is excluded entirely — briefs/reports/review are
+#     already handed to the reviewer via explicit paths; this is this
+#     script's own prior output (untracked until it `mv`s itself into
+#     place), so listing it here is self-inclusion, not review material.
+#   - lock/generated files (name in LOCK_BASENAMES, or matching a
+#     LOCK_GLOBS pattern) are listed by NAME + size only, content never
+#     inlined — a human reviews a diff, not a regenerated lockfile.
+# Everything else keeps the original behavior: content inlined, capped at
+# UNTRACKED_FILE_LINE_CAP lines per file with a truncation note.
 git ls-files --others --exclude-standard -z | UT_CAP="$UNTRACKED_FILE_LINE_CAP" python3 -c '
-import os, sys
+import fnmatch, os, sys
 
 cap = int(os.environ["UT_CAP"])
 data = sys.stdin.buffer.read()
 paths = [p.decode("utf-8", "replace") for p in data.split(b"\x00") if p]
 
+# self-inclusion bug (see header comment): this script'"'"'s own output lives
+# under .claude/state/review/ and is untracked until the final `mv` — never
+# list anything under .claude/state/** here.
+STATE_PREFIX = ".claude/state/"
+paths = [p for p in paths if p != ".claude/state" and not p.startswith(STATE_PREFIX)]
+
+LOCK_BASENAMES = {
+    "package-lock.json", "uv.lock", "yarn.lock", "pnpm-lock.yaml",
+    "Cargo.lock", "poetry.lock", "composer.lock",
+}
+LOCK_GLOBS = ("*.min.js", "*.min.css")
+
+def is_lock_or_generated(p):
+    base = os.path.basename(p)
+    if base in LOCK_BASENAMES:
+        return True
+    return any(fnmatch.fnmatch(base, g) for g in LOCK_GLOBS)
+
 out = []
 if not paths:
     out.append("(none)")
 for p in paths:
+    if is_lock_or_generated(p):
+        try:
+            size = f"{os.path.getsize(p)} bytes"
+        except OSError as e:
+            size = f"unknown size: {e}"
+        out.append(f"## Untracked (content omitted — lockfile/generated): {p} ({size})")
+        out.append("")
+        continue
     out.append(f"### {p}")
     out.append("")
     out.append("```")
