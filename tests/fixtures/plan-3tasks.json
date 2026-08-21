@@ -1,0 +1,43 @@
+{
+  "tasks": [
+    {
+      "id": "001",
+      "title": "Set up API skeleton",
+      "level": 1,
+      "service": "api",
+      "service_path": "app",
+      "role": "backend-implementer",
+      "files": ["app/main.py"],
+      "depends_on": [],
+      "estimate_tokens": 4000,
+      "status": "pending",
+      "complexity_class": "boilerplate"
+    },
+    {
+      "id": "002",
+      "title": "Add auth routes",
+      "level": 2,
+      "service": "api",
+      "service_path": "app",
+      "role": "backend-implementer",
+      "files": ["app/auth.py"],
+      "depends_on": ["001"],
+      "estimate_tokens": 6000,
+      "status": "pending",
+      "complexity_class": "follow-pattern"
+    },
+    {
+      "id": "003",
+      "title": "Add strategy endpoints",
+      "level": 3,
+      "service": "api",
+      "service_path": "app",
+      "role": "backend-implementer",
+      "files": ["app/strategy.py"],
+      "depends_on": ["002"],
+      "estimate_tokens": 8000,
+      "status": "pending",
+      "complexity_class": "novel-design"
+    }
+  ]
+}

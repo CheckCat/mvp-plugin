@@ -1,0 +1,392 @@
+{
+  "version": "1.0",
+  "generated_at": "1970-01-01T00:00:00Z",
+  "tool": "tree-sitter-fallback",
+  "source_root": "/Users/vadim/Documents/Pet/vireo",
+  "files_scanned": 8,
+  "files_hash": "sha256:e861af3517d18ebd0d49ce5b60dafdf70a1c98869972285d150ea40012c3a554",
+  "nodes": [
+    {
+      "id": "packages/backend/src/app.module.ts#AppModule",
+      "kind": "class",
+      "file": "packages/backend/src/app.module.ts",
+      "exports": [
+        "AppModule"
+      ],
+      "signature": "class AppModule",
+      "docstring": ""
+    },
+    {
+      "id": "packages/backend/src/config/config.module.ts#ConfigModule",
+      "kind": "class",
+      "file": "packages/backend/src/config/config.module.ts",
+      "exports": [
+        "ConfigModule"
+      ],
+      "signature": "class ConfigModule",
+      "docstring": ""
+    },
+    {
+      "id": "packages/backend/src/config/env.schema.ts#envSchema",
+      "kind": "const",
+      "file": "packages/backend/src/config/env.schema.ts",
+      "exports": [
+        "envSchema"
+      ],
+      "signature": "const envSchema",
+      "docstring": ""
+    },
+    {
+      "id": "packages/backend/src/config/env.schema.ts#Env",
+      "kind": "type",
+      "file": "packages/backend/src/config/env.schema.ts",
+      "exports": [
+        "Env"
+      ],
+      "signature": "type Env",
+      "docstring": ""
+    },
+    {
+      "id": "packages/backend/src/config/env.schema.ts#validateEnv",
+      "kind": "function",
+      "file": "packages/backend/src/config/env.schema.ts",
+      "exports": [
+        "validateEnv"
+      ],
+      "signature": "function validateEnv",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/language.ts#LANGUAGES",
+      "kind": "const",
+      "file": "packages/shared/src/language.ts",
+      "exports": [
+        "LANGUAGES"
+      ],
+      "signature": "const LANGUAGES",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/language.ts#languageSchema",
+      "kind": "const",
+      "file": "packages/shared/src/language.ts",
+      "exports": [
+        "languageSchema"
+      ],
+      "signature": "const languageSchema",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/language.ts#Language",
+      "kind": "type",
+      "file": "packages/shared/src/language.ts",
+      "exports": [
+        "Language"
+      ],
+      "signature": "type Language",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/snippet.ts#SNIPPET_TITLE_MAX",
+      "kind": "const",
+      "file": "packages/shared/src/snippet.ts",
+      "exports": [
+        "SNIPPET_TITLE_MAX"
+      ],
+      "signature": "const SNIPPET_TITLE_MAX",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/snippet.ts#SNIPPET_CONTENT_MAX",
+      "kind": "const",
+      "file": "packages/shared/src/snippet.ts",
+      "exports": [
+        "SNIPPET_CONTENT_MAX"
+      ],
+      "signature": "const SNIPPET_CONTENT_MAX",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/snippet.ts#snippetTitleSchema",
+      "kind": "const",
+      "file": "packages/shared/src/snippet.ts",
+      "exports": [
+        "snippetTitleSchema"
+      ],
+      "signature": "const snippetTitleSchema",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/snippet.ts#snippetContentSchema",
+      "kind": "const",
+      "file": "packages/shared/src/snippet.ts",
+      "exports": [
+        "snippetContentSchema"
+      ],
+      "signature": "const snippetContentSchema",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/snippet.ts#snippetSchema",
+      "kind": "const",
+      "file": "packages/shared/src/snippet.ts",
+      "exports": [
+        "snippetSchema"
+      ],
+      "signature": "const snippetSchema",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/snippet.ts#Snippet",
+      "kind": "type",
+      "file": "packages/shared/src/snippet.ts",
+      "exports": [
+        "Snippet"
+      ],
+      "signature": "type Snippet",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/snippet.ts#snippetSummarySchema",
+      "kind": "const",
+      "file": "packages/shared/src/snippet.ts",
+      "exports": [
+        "snippetSummarySchema"
+      ],
+      "signature": "const snippetSummarySchema",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/snippet.ts#SnippetSummary",
+      "kind": "type",
+      "file": "packages/shared/src/snippet.ts",
+      "exports": [
+        "SnippetSummary"
+      ],
+      "signature": "type SnippetSummary",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/snippet.ts#createSnippetSchema",
+      "kind": "const",
+      "file": "packages/shared/src/snippet.ts",
+      "exports": [
+        "createSnippetSchema"
+      ],
+      "signature": "const createSnippetSchema",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/snippet.ts#CreateSnippetInput",
+      "kind": "type",
+      "file": "packages/shared/src/snippet.ts",
+      "exports": [
+        "CreateSnippetInput"
+      ],
+      "signature": "type CreateSnippetInput",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/snippet.ts#updateSnippetSchema",
+      "kind": "const",
+      "file": "packages/shared/src/snippet.ts",
+      "exports": [
+        "updateSnippetSchema"
+      ],
+      "signature": "const updateSnippetSchema",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/snippet.ts#UpdateSnippetInput",
+      "kind": "type",
+      "file": "packages/shared/src/snippet.ts",
+      "exports": [
+        "UpdateSnippetInput"
+      ],
+      "signature": "type UpdateSnippetInput",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/snippet.ts#SNIPPET_PAGE_SIZE_DEFAULT",
+      "kind": "const",
+      "file": "packages/shared/src/snippet.ts",
+      "exports": [
+        "SNIPPET_PAGE_SIZE_DEFAULT"
+      ],
+      "signature": "const SNIPPET_PAGE_SIZE_DEFAULT",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/snippet.ts#SNIPPET_PAGE_SIZE_MAX",
+      "kind": "const",
+      "file": "packages/shared/src/snippet.ts",
+      "exports": [
+        "SNIPPET_PAGE_SIZE_MAX"
+      ],
+      "signature": "const SNIPPET_PAGE_SIZE_MAX",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/snippet.ts#listSnippetsQuerySchema",
+      "kind": "const",
+      "file": "packages/shared/src/snippet.ts",
+      "exports": [
+        "listSnippetsQuerySchema"
+      ],
+      "signature": "const listSnippetsQuerySchema",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/snippet.ts#ListSnippetsQuery",
+      "kind": "type",
+      "file": "packages/shared/src/snippet.ts",
+      "exports": [
+        "ListSnippetsQuery"
+      ],
+      "signature": "type ListSnippetsQuery",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/snippet.ts#listSnippetsResponseSchema",
+      "kind": "const",
+      "file": "packages/shared/src/snippet.ts",
+      "exports": [
+        "listSnippetsResponseSchema"
+      ],
+      "signature": "const listSnippetsResponseSchema",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/snippet.ts#ListSnippetsResponse",
+      "kind": "type",
+      "file": "packages/shared/src/snippet.ts",
+      "exports": [
+        "ListSnippetsResponse"
+      ],
+      "signature": "type ListSnippetsResponse",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/tag.ts#TAG_NAME_MAX",
+      "kind": "const",
+      "file": "packages/shared/src/tag.ts",
+      "exports": [
+        "TAG_NAME_MAX"
+      ],
+      "signature": "const TAG_NAME_MAX",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/tag.ts#tagNameRegex",
+      "kind": "const",
+      "file": "packages/shared/src/tag.ts",
+      "exports": [
+        "tagNameRegex"
+      ],
+      "signature": "const tagNameRegex",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/tag.ts#rawTagNameSchema",
+      "kind": "const",
+      "file": "packages/shared/src/tag.ts",
+      "exports": [
+        "rawTagNameSchema"
+      ],
+      "signature": "const rawTagNameSchema",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/tag.ts#tagNameSchema",
+      "kind": "const",
+      "file": "packages/shared/src/tag.ts",
+      "exports": [
+        "tagNameSchema"
+      ],
+      "signature": "const tagNameSchema",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/tag.ts#TagName",
+      "kind": "type",
+      "file": "packages/shared/src/tag.ts",
+      "exports": [
+        "TagName"
+      ],
+      "signature": "type TagName",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/tag.ts#normalizeTagName",
+      "kind": "function",
+      "file": "packages/shared/src/tag.ts",
+      "exports": [
+        "normalizeTagName"
+      ],
+      "signature": "function normalizeTagName",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/tag.ts#tagSchema",
+      "kind": "const",
+      "file": "packages/shared/src/tag.ts",
+      "exports": [
+        "tagSchema"
+      ],
+      "signature": "const tagSchema",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/tag.ts#Tag",
+      "kind": "type",
+      "file": "packages/shared/src/tag.ts",
+      "exports": [
+        "Tag"
+      ],
+      "signature": "type Tag",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/tag.ts#tagWithCountSchema",
+      "kind": "const",
+      "file": "packages/shared/src/tag.ts",
+      "exports": [
+        "tagWithCountSchema"
+      ],
+      "signature": "const tagWithCountSchema",
+      "docstring": ""
+    },
+    {
+      "id": "packages/shared/src/tag.ts#TagWithCount",
+      "kind": "type",
+      "file": "packages/shared/src/tag.ts",
+      "exports": [
+        "TagWithCount"
+      ],
+      "signature": "type TagWithCount",
+      "docstring": ""
+    }
+  ],
+  "edges": [
+    {
+      "from": "packages/backend/src/main.ts#<module>",
+      "to": "packages/backend/src/app.module.ts#AppModule",
+      "kind": "imports"
+    },
+    {
+      "from": "packages/backend/src/main.ts#<module>",
+      "to": "packages/backend/src/config/env.schema.ts#envSchema",
+      "kind": "imports"
+    },
+    {
+      "from": "packages/backend/src/main.ts#<module>",
+      "to": "packages/backend/src/config/env.schema.ts#Env",
+      "kind": "imports"
+    },
+    {
+      "from": "packages/backend/src/main.ts#<module>",
+      "to": "packages/backend/src/config/env.schema.ts#validateEnv",
+      "kind": "imports"
+    }
+  ]
+}

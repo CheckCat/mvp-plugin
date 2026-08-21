@@ -1,0 +1,27 @@
+{
+  "required_fields": [
+    "id",
+    "title",
+    "level",
+    "service",
+    "service_path",
+    "role",
+    "files",
+    "depends_on",
+    "estimate_tokens",
+    "status",
+    "complexity_class"
+  ],
+  "enums": {
+    "complexity_class": ["boilerplate", "follow-pattern", "novel-design"],
+    "status": ["pending", "in_progress", "done", "failed"],
+    "role": [
+      "backend-implementer",
+      "frontend-implementer",
+      "test-writer",
+      "devops-engineer",
+      "integration-specialist"
+    ]
+  },
+  "max_estimate_tokens": 25000
+}

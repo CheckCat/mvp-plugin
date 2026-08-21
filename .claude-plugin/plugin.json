@@ -1,0 +1,8 @@
+{
+  "name": "mvp",
+  "description": "Greenfield MVP pipeline: brief packaging, clarification, bootstrap, DAG planning, autonomous build",
+  "version": "2.0.0",
+  "author": {"name": "vadim"},
+  "license": "MIT",
+  "keywords": ["mvp", "pipeline", "workflow"]
+}
