@@ -1,0 +1,35 @@
+a2546ca (HEAD -> main) docs: разъяснить POSTGRES_PORT vs DATABASE_URL в .env.example
+0ff6764 chore: cleanup pipeline infrastructure
+3c83e1e ci: Собрать корневой docker-compose.yml с db/backend/frontend, healthchecks postgres, depends_on, volume db-data, и финальный README с инструкциями docker compose up
+99abf39 ci: Создать multi-stage Dockerfile для frontend (Next.js standalone output)
+891cc4e feat: Реализовать страницу /tags со списком тегов и счётчиком, клик ведёт на /snippets?tag=...
+e93d54d feat: Реализовать страницы /snippets/new (форма создания) и /snippets/[id] (просмотр с highlight.js, кнопки редактировать/удалить с server actions)
+83dd8fa feat: Оптимизировать поиск сниппетов — сохранять query при фильтрации и пагинации
+1261b71 chore: persist state after task-012
+89d95c2 feat: Реализовать страницу /snippets со списком, поиском и фильтром по тегу
+f561f11 chore: persist state + telemetry after task-011
+1b45fe3 fix: Use /api/tags endpoint for API key validation in login action
+2eff53a feat: Скаффолд Next.js 15 App Router приложения с Tailwind 4, shadcn/ui примитивами (Button, Input, Table, Dialog, Select) и базовым layout
+f4a529f chore(playbook): обновить devops-engineer.md шаблон Dockerfile
+d7f4806 chore: persist state + telemetry after task-009
+57fe9d8 ci: Multi-stage Dockerfile для backend с pnpm, prisma generate и migrate deploy на старте
+0535693 feat: Реализовать TagsModule: GET /api/tags со списком тегов и counts сниппетов, тесты + 401
+f818636 chore: persist state + telemetry after task-007
+d1e90b6 feat: SnippetsModule CRUD c фильтрами q/tag/page и тестами
+0469a9c feat: Реализовать публичный HealthModule с GET /api/health возвращающим {status:'ok'}
+72b15f0 chore: persist TODO + cost analysis after task-005 run
+c2c906c feat: AuthModule с глобальным ApiKeyGuard (X-API-Key vs BACKEND_API_KEY)
+b89beab chore: persist state + TODO after task-004 hybrid run
+17f6a15 feat: Определить Prisma schema (Snippet, Tag, SnippetTag), создать initial migration и PrismaService модуль
+f2233e5 chore(agents): planned_files → hint, service → hard boundary
+82dc660 chore: mark task-003 done, focus → task-004
+b320eb2 feat: backend scaffold (NestJS, ValidationPipe, ConfigModule + Zod env)
+710b596 chore: persist state after task-002 done (manual finalize)
+ed004d6 feat: shared package с Zod-схемами Snippet/Tag/Language
+6cc9028 chore: persist plan state after task-001 done
+b9e824f chore: Инициализировать pnpm workspace монорепо с Turborepo, корневыми tsconfig
+587be60 chore: tighten validator Check 4 to staged-only + harness ignore, reviewer self-check
+0db4272 chore: plan MVP DAG
+2b5cf6e chore: regenerate agents via assemble-agent.sh + unignore decisions.log
+6e35b56 chore: bootstrap MVP playbook scaffolding
+f82d78f Initial commit

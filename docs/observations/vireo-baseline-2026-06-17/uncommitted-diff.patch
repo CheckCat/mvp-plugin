@@ -1,0 +1,224 @@
+diff --git a/.env.example b/.env.example
+index 0537358..6c87e58 100644
+--- a/.env.example
++++ b/.env.example
+@@ -16,7 +16,7 @@ DATABASE_URL=postgresql://snippet:changeme@db:5432/snippet_stash?schema=public
+ # Сгенерировать: openssl rand -hex 32
+ BACKEND_API_KEY=replace-me-with-long-random-string
+ BACKEND_PORT=3000
+-NODE_ENV=production
++NODE_ENV=development
+ 
+ # --- Frontend ---
+ # URL backend для server-side fetch (внутри compose — http://backend:3000)
+diff --git a/CLAUDE.md b/CLAUDE.md
+index edeb88b..5a72b69 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -95,3 +95,142 @@ pnpm turbo test
+ - Бизнес-логика во frontend server actions сложнее CRUD-обёртки над backend
+ - Дублирование Zod-схем между frontend и backend (шарь через `@snippet-stash/shared`)
+ - `--no-verify` при коммите чтобы "просто пройти" hook
++
++<!-- rtk-instructions v2 -->
++# RTK (Rust Token Killer) - Token-Optimized Commands
++
++## Golden Rule
++
++**Always prefix commands with `rtk`**. If RTK has a dedicated filter, it uses it. If not, it passes through unchanged. This means RTK is always safe to use.
++
++**Important**: Even in command chains with `&&`, use `rtk`:
++```bash
++# ❌ Wrong
++git add . && git commit -m "msg" && git push
++
++# ✅ Correct
++rtk git add . && rtk git commit -m "msg" && rtk git push
++```
++
++## RTK Commands by Workflow
++
++### Build & Compile (80-90% savings)
++```bash
++rtk cargo build         # Cargo build output
++rtk cargo check         # Cargo check output
++rtk cargo clippy        # Clippy warnings grouped by file (80%)
++rtk tsc                 # TypeScript errors grouped by file/code (83%)
++rtk lint                # ESLint/Biome violations grouped (84%)
++rtk prettier --check    # Files needing format only (70%)
++rtk next build          # Next.js build with route metrics (87%)
++```
++
++### Test (60-99% savings)
++```bash
++rtk cargo test          # Cargo test failures only (90%)
++rtk go test             # Go test failures only (90%)
++rtk jest                # Jest failures only (99.5%)
++rtk vitest              # Vitest failures only (99.5%)
++rtk playwright test     # Playwright failures only (94%)
++rtk pytest              # Python test failures only (90%)
++rtk rake test           # Ruby test failures only (90%)
++rtk rspec               # RSpec test failures only (60%)
++rtk test <cmd>          # Generic test wrapper - failures only
++```
++
++### Git (59-80% savings)
++```bash
++rtk git status          # Compact status
++rtk git log             # Compact log (works with all git flags)
++rtk git diff            # Compact diff (80%)
++rtk git show            # Compact show (80%)
++rtk git add             # Ultra-compact confirmations (59%)
++rtk git commit          # Ultra-compact confirmations (59%)
++rtk git push            # Ultra-compact confirmations
++rtk git pull            # Ultra-compact confirmations
++rtk git branch          # Compact branch list
++rtk git fetch           # Compact fetch
++rtk git stash           # Compact stash
++rtk git worktree        # Compact worktree
++```
++
++Note: Git passthrough works for ALL subcommands, even those not explicitly listed.
++
++### GitHub (26-87% savings)
++```bash
++rtk gh pr view <num>    # Compact PR view (87%)
++rtk gh pr checks        # Compact PR checks (79%)
++rtk gh run list         # Compact workflow runs (82%)
++rtk gh issue list       # Compact issue list (80%)
++rtk gh api              # Compact API responses (26%)
++```
++
++### JavaScript/TypeScript Tooling (70-90% savings)
++```bash
++rtk pnpm list           # Compact dependency tree (70%)
++rtk pnpm outdated       # Compact outdated packages (80%)
++rtk pnpm install        # Compact install output (90%)
++rtk npm run <script>    # Compact npm script output
++rtk npx <cmd>           # Compact npx command output
++rtk prisma              # Prisma without ASCII art (88%)
++```
++
++### Files & Search (60-75% savings)
++```bash
++rtk ls <path>           # Tree format, compact (65%)
++rtk read <file>         # Code reading with filtering (60%)
++rtk grep <pattern>      # Search grouped by file (75%). Format flags (-c, -l, -L, -o, -Z) run raw.
++rtk find <pattern>      # Find grouped by directory (70%)
++```
++
++### Analysis & Debug (70-90% savings)
++```bash
++rtk err <cmd>           # Filter errors only from any command
++rtk log <file>          # Deduplicated logs with counts
++rtk json <file>         # JSON structure without values
++rtk deps                # Dependency overview
++rtk env                 # Environment variables compact
++rtk summary <cmd>       # Smart summary of command output
++rtk diff                # Ultra-compact diffs
++```
++
++### Infrastructure (85% savings)
++```bash
++rtk docker ps           # Compact container list
++rtk docker images       # Compact image list
++rtk docker logs <c>     # Deduplicated logs
++rtk kubectl get         # Compact resource list
++rtk kubectl logs        # Deduplicated pod logs
++```
++
++### Network (65-70% savings)
++```bash
++rtk curl <url>          # Compact HTTP responses (70%)
++rtk wget <url>          # Compact download output (65%)
++```
++
++### Meta Commands
++```bash
++rtk gain                # View token savings statistics
++rtk gain --history      # View command history with savings
++rtk discover            # Analyze Claude Code sessions for missed RTK usage
++rtk proxy <cmd>         # Run command without filtering (for debugging)
++rtk init                # Add RTK instructions to CLAUDE.md
++rtk init --global       # Add RTK to ~/.claude/CLAUDE.md
++```
++
++## Token Savings Overview
++
++| Category | Commands | Typical Savings |
++|----------|----------|-----------------|
++| Tests | vitest, playwright, cargo test | 90-99% |
++| Build | next, tsc, lint, prettier | 70-87% |
++| Git | status, log, diff, add, commit | 59-80% |
++| GitHub | gh pr, gh run, gh issue | 26-87% |
++| Package Managers | pnpm, npm, npx | 70-90% |
++| Files | ls, read, grep, find | 60-75% |
++| Infrastructure | docker, kubectl | 85% |
++| Network | curl, wget | 65-70% |
++
++Overall average: **60-90% token reduction** on common development operations.
++<!-- /rtk-instructions -->
+\ No newline at end of file
+diff --git a/packages/frontend/src/app/login/actions.ts b/packages/frontend/src/app/login/actions.ts
+index a618179..57dea20 100644
+--- a/packages/frontend/src/app/login/actions.ts
++++ b/packages/frontend/src/app/login/actions.ts
+@@ -10,7 +10,7 @@ import { cookies } from 'next/headers'
+ import { redirect } from 'next/navigation'
+ import { SESSION_COOKIE_NAME } from '@/lib/session'
+ 
+-const BACKEND_URL = process.env.BACKEND_URL ?? 'http://localhost:3001'
++const BACKEND_URL = process.env.BACKEND_INTERNAL_URL ?? 'http://localhost:3000'
+ 
+ export interface LoginState {
+   error: string | null
+diff --git a/packages/frontend/src/lib/api-client.ts b/packages/frontend/src/lib/api-client.ts
+index c6261b8..4b35446 100644
+--- a/packages/frontend/src/lib/api-client.ts
++++ b/packages/frontend/src/lib/api-client.ts
+@@ -17,8 +17,9 @@ import type {
+   UpdateSnippetInput,
+ } from '@snippet-stash/shared'
+ 
+-// Backend base URL — falls back to the Docker-compose service name for SSR
+-const BACKEND_URL = process.env.BACKEND_URL ?? 'http://localhost:3001'
++// Backend base URL — внутри docker-compose это http://backend:3000 (service name).
++// При локальном dev без compose — fallback на хостовой backend port.
++const BACKEND_URL = process.env.BACKEND_INTERNAL_URL ?? 'http://localhost:3000'
+ 
+ class ApiError extends Error {
+   constructor(
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index cdfa704..5ae01e4 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -135,6 +135,9 @@ importers:
+       clsx:
+         specifier: ^2.1.0
+         version: 2.1.1
++      highlight.js:
++        specifier: ^11.11.1
++        version: 11.11.1
+       lucide-react:
+         specifier: ^0.460.0
+         version: 0.460.0(react@19.2.7)
+@@ -2754,6 +2757,10 @@ packages:
+     resolution: {integrity: sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==}
+     engines: {node: '>= 0.4'}
+ 
++  highlight.js@11.11.1:
++    resolution: {integrity: sha512-Xwwo44whKBVCYoliBQwaPvtd/2tYFkRQtXDWj1nackaV2JPXx3L0+Jvd8/qCJ2p+ML0/XVkJ2q+Mr+UVdpJK5w==}
++    engines: {node: '>=12.0.0'}
++
+   html-escaper@2.0.2:
+     resolution: {integrity: sha512-H2iMtd0I4Mt5eYiapRdIDjp+XzelXQ0tFE4JS7YFwFevXXMmOp9myNrUvCg0D6ws8iqkRPBfKHgbwig1SmlLfg==}
+ 
+@@ -7420,6 +7427,8 @@ snapshots:
+     dependencies:
+       function-bind: 1.1.2
+ 
++  highlight.js@11.11.1: {}
++
+   html-escaper@2.0.2: {}
+ 
+   http-errors@2.0.1:

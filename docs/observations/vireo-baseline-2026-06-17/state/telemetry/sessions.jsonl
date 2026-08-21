@@ -1,0 +1,15 @@
+{"event":"session_start","playbook":"mvp"}
+{"event":"session_start","playbook":"mvp","mode":"single-task","target":"task-006"}
+{"event":"session_end","halt_reason":"only-target-done","completed":6,"total":16,"mode":"single-task","target":"task-006"}
+{"event":"session_start","playbook":"mvp","mode":"single-task","target":"task-007"}
+{"event":"session_end","halt_reason":"validator-failed-after-review","completed":6,"total":16,"mode":"single-task","target":"task-007"}
+{"event":"session_start","playbook":"mvp","mode":"single-task","target":"task-008"}
+{"event":"session_end","halt_reason":"only-target-done","completed":8,"total":16,"mode":"single-task","target":"task-008"}
+{"event":"session_start","playbook":"mvp","mode":"single-task","target":"task-009"}
+{"event":"session_end","halt_reason":"validator-failed-after-review","completed":8,"total":16,"mode":"single-task","target":"task-009"}
+{"event":"session_start","playbook":"mvp","mode":"single-task","target":"task-010"}
+{"event":"session_end","halt_reason":"only-target-done","completed":10,"total":16,"mode":"single-task","target":"task-010"}
+{"event":"session_start","playbook":"mvp","mode":"all-pending","target":null}
+{"event":"session_end","halt_reason":"validator-failed-after-patch","completed":11,"total":16,"mode":"all-pending","target":null}
+{"event":"session_start","playbook":"mvp","mode":"all-pending","target":null}
+{"event":"session_end","halt_reason":"all-done","completed":16,"total":16,"mode":"all-pending","target":null}

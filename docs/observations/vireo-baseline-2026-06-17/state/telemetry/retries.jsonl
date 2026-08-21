@@ -1,0 +1,10 @@
+{"event":"retry","task_id":"task-007","phase":"review","attempt":1,"reason":"request-changes"}
+{"event":"retry","task_id":"task-009","phase":"review","attempt":1,"reason":"request-changes"}
+{"event":"retry","task_id":"task-009","phase":"review","attempt":2,"reason":"request-changes"}
+{"event":"retry","task_id":"task-010","phase":"validator","attempt":1,"reason":"modified_files_reported"}
+{"event":"retry","task_id":"task-010","phase":"validator","attempt":2,"reason":"modified_files_reported"}
+{"event":"retry","task_id":"task-010","phase":"review","attempt":1,"reason":"request-changes"}
+{"event":"retry","task_id":"task-012","phase":"review","attempt":1,"reason":"request-changes"}
+{"event":"retry","task_id":"task-013","phase":"review","attempt":1,"reason":"request-changes"}
+{"event":"retry","task_id":"task-015","phase":"review","attempt":1,"reason":"request-changes"}
+{"event":"retry","task_id":"task-016","phase":"review","attempt":1,"reason":"request-changes"}
