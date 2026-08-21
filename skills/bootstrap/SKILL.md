@@ -77,7 +77,7 @@ npm --prefix services/frontend run test -- --run
 ```
 ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/assemble-agent.sh <role> [stack]
 ```
-Вызови на каждую нужную роль: `backend-implementer <backend>`, `devops-engineer docker-dokploy.<backend>`, `test-writer <backend>`, `code-reviewer`, `validator` — всегда; `frontend-implementer <frontend>` — если `frontend != none`; `integration-specialist` — если brief явно описывает интеграции со сторонним API (сервисы `integration-*` в "## Services"). `TEMPLATES_DIR`/`OUT_DIR` не трогай — дефолты уже указывают на `${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/templates` и `.claude/agents`.
+Собираются ТОЛЬКО роли из enum `role` в `skills/plan/references/plan-schema.json` — по ним `mvp:build` диспатчит агентов (`agentType`). Вызови: `backend-implementer <backend>`, `devops-engineer docker-dokploy.<backend>`, `test-writer <backend>` — всегда; `frontend-implementer <frontend>` — если `frontend != none`; `integration-specialist` — если brief явно описывает интеграции со сторонним API (сервисы `integration-*` в "## Services"). Ролей `validator`/`code-reviewer` в проекте нет: эти шаги v2 гоняет инлайн-шаблонами (`skills/build/agents/*.md`) на дефолтном агенте — собирать их не надо и не из чего. `TEMPLATES_DIR`/`OUT_DIR` не трогай — дефолты уже указывают на `${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/templates` и `.claude/agents`.
 
 Затем ОБЯЗАТЕЛЬНО:
 ```
@@ -96,7 +96,7 @@ ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/verify-agents-drift.sh
 ```
 ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/check-meta.sh
 ```
-`ok:false` → почини `CLAUDE.md`/`ARCHITECTURE.md` по `data.violations`, повтори. После 2 неудачных попыток подряд — Stop&Ask, не третья попытка молча.
+Три гейта: `CLAUDE.md` (есть, ≤150 строк, обязательные секции), `ARCHITECTURE.md` (есть, ни одно ребро не нарушает `FORBIDDEN_EDGE`), `.claude/state/ci-mirror.sh` (есть, непустой, проходит `bash -n`). `ok:false` → почини соответствующий файл по `data.violations`, повтори. Нарушение `ci-mirror-*` — это возврат к Шагу 3.2, а не к правке `CLAUDE.md`: этот файл дальше гоняет `validate-task.sh` на каждой задаче build'а. После 2 неудачных попыток подряд — Stop&Ask, не третья попытка молча.
 
 ## Шаг 7 — phase + finalize
 

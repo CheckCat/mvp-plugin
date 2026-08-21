@@ -20,7 +20,7 @@
 #
 # Использование:
 #   assemble-agent.sh backend-implementer nestjs
-#   assemble-agent.sh code-reviewer            # роли без стек-вариантов
+#   assemble-agent.sh integration-specialist   # роли без стек-вариантов
 #
 # Переменные окружения:
 #   TEMPLATES_DIR  — путь к шаблонам (default: <plugin>/skills/bootstrap/templates)
