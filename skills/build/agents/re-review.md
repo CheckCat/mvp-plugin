@@ -32,7 +32,8 @@ original list — this pass is strictly one verdict per listed finding.
 
 ## Do Not Trust the Report
 
-Treat any fix report as an unverified claim. Verify each `ADDRESSED`
+Read the fix report: `.claude/state/reports/task-{{TASK_ID}}.md`. Treat
+everything appended to it as an unverified claim. Verify each `ADDRESSED`
 verdict against the diff itself, not against what the fix report says it
 did.
 
@@ -48,7 +49,7 @@ Reply with ONLY the following, ≤ 15 lines. Keep `FINDINGS:` at the start of
 the line, uppercase — the workflow greps for it:
 
 ```
-FINDINGS: [{"file":"...","line":N,"quote":"...","summary":"...","verdict":"ADDRESSED|NOT ADDRESSED"}]
+FINDINGS: [{"severity":"...","file":"...","line":N,"quote":"...","summary":"...","verdict":"ADDRESSED|NOT ADDRESSED"}]
 ```
 
 Then, only if applicable, one `Out-of-Scope:` line with a brief note. No

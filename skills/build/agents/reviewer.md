@@ -17,10 +17,16 @@ codebase beyond a concrete, named risk (e.g. the diff changes a shared
 function's signature — checking its call sites is a named risk, "let me
 look around" is not).
 
+If `{{PACKAGE_PATH}}` is missing, or a hunk you must judge is cut off
+mid-function, do not fetch the diff yourself with git. Say so explicitly in
+your verdict, and mark the requirements you cannot verify because of it as
+"cannot verify" rather than guessing at what the missing content contains.
+
 ## Do Not Trust the Report
 
-Anything the implementer claimed in `.claude/state/reports/task-{{TASK_ID}}.md`
-is an unverified claim, not evidence. Verify every claim against the diff
+Read the implementer's report: `.claude/state/reports/task-{{TASK_ID}}.md`.
+Treat everything in it as unverified claims, not evidence — it may be
+incomplete, inaccurate, or optimistic. Verify every claim against the diff
 itself before relying on it. A stated rationale in the report ("kept it
 simple deliberately," "left it per YAGNI") never downgrades a finding's
 severity — the implementer grading their own work doesn't count.
