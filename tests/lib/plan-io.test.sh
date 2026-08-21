@@ -72,6 +72,19 @@ with open(path, "w") as f:
 PY
 }
 
+# new_repo_with_plan <raw-json-content> -> path to a fresh tmp-git project
+# with plan.json set to the given raw content (committed, clean baseline).
+new_repo_with_plan() {
+  local content="$1"
+  local dir
+  dir="$(mktemp -d -p "$tmproot")"
+  ( cd "$dir" && git init -q && git config user.email test@test.local && git config user.name test )
+  mkdir -p "$dir/.claude/state"
+  printf '%s' "$content" > "$dir/.claude/state/plan.json"
+  ( cd "$dir" && git add .claude/state/plan.json && git commit -q -m "chore: seed plan" )
+  echo "$dir"
+}
+
 # ---------------------------------------------------------------------------
 # (a) validate
 # ---------------------------------------------------------------------------
@@ -287,5 +300,105 @@ assert_eq "argv guard: complete missing --tokens ok" "False" "$(json_field "$out
 out="$(run_plan_io "$dir" set-status 001 not-a-status)"; rc=$?
 assert_eq "argv guard: set-status invalid status exit code" "1" "$rc"
 assert_eq "argv guard: set-status invalid status ok" "False" "$(json_field "$out" 'd["ok"]')"
+
+# ---------------------------------------------------------------------------
+# regression: C-1 — all-done is terminal ONLY when every task is done.
+# failed/in_progress tasks (with no eligible pending task) must halt
+# dag-stuck with a detail naming the blocking id(s) and their status.
+# ---------------------------------------------------------------------------
+
+# (i) 001 done + 002 failed -> dag-stuck, detail names 002(failed)
+dir="$(new_repo)"
+mutate_plan "$dir" 'plan["tasks"] = plan["tasks"][:2]'
+run_plan_io "$dir" set-status 001 done >/dev/null
+run_plan_io "$dir" set-status 002 failed >/dev/null
+out="$(run_plan_io "$dir" next)"; rc=$?
+assert_eq "C-1(i) 001 done + 002 failed: exit code" "0" "$rc"
+assert_eq "C-1(i) 001 done + 002 failed: halt" "dag-stuck" "$(json_field "$out" 'd["data"]["halt"]')"
+detail="$(json_field "$out" 'd["data"]["detail"]')"
+assert_contains "C-1(i) 001 done + 002 failed: detail names 002(failed)" "$detail" "002(failed)"
+
+# (ii) same, but 002 in_progress -> dag-stuck, detail names 002(in_progress)
+dir="$(new_repo)"
+mutate_plan "$dir" 'plan["tasks"] = plan["tasks"][:2]'
+run_plan_io "$dir" set-status 001 done >/dev/null
+run_plan_io "$dir" set-status 002 in_progress >/dev/null
+out="$(run_plan_io "$dir" next)"; rc=$?
+assert_eq "C-1(ii) 001 done + 002 in_progress: exit code" "0" "$rc"
+assert_eq "C-1(ii) 001 done + 002 in_progress: halt" "dag-stuck" "$(json_field "$out" 'd["data"]["halt"]')"
+detail="$(json_field "$out" 'd["data"]["detail"]')"
+assert_contains "C-1(ii) 001 done + 002 in_progress: detail names 002(in_progress)" "$detail" "002(in_progress)"
+
+# (iii) truly all done -> all-done (still holds after the C-1 fix)
+dir="$(new_repo)"
+mutate_plan "$dir" 'plan["tasks"] = plan["tasks"][:2]'
+run_plan_io "$dir" set-status 001 done >/dev/null
+run_plan_io "$dir" set-status 002 done >/dev/null
+out="$(run_plan_io "$dir" next)"; rc=$?
+assert_eq "C-1(iii) all done: halt" "all-done" "$(json_field "$out" 'd["data"]["halt"]')"
+
+# ---------------------------------------------------------------------------
+# regression: I-1 — validate rejects a missing/empty plan.tasks structurally
+# (ok:false), instead of silently treating "no tasks" as valid.
+# ---------------------------------------------------------------------------
+
+dir="$(new_repo_with_plan '{}')"
+out="$(run_plan_io "$dir" validate)"; rc=$?
+assert_eq "I-1 missing tasks field ({}): exit code" "1" "$rc"
+assert_eq "I-1 missing tasks field ({}): ok" "False" "$(json_field "$out" 'd["ok"]')"
+
+dir="$(new_repo_with_plan '{"tasks": []}')"
+out="$(run_plan_io "$dir" validate)"; rc=$?
+assert_eq "I-1 empty tasks array: exit code" "1" "$rc"
+assert_eq "I-1 empty tasks array: ok" "False" "$(json_field "$out" 'd["ok"]')"
+
+# ---------------------------------------------------------------------------
+# regression: I-2 — --schema file that parses but has none of the recognized
+# keys must error clearly, not silently fall back to defaults.
+# ---------------------------------------------------------------------------
+
+dir="$(new_repo)"
+unrecognized_schema="$dir/unrecognized-schema.json"
+echo '{"totally_unrelated_key": true}' > "$unrecognized_schema"
+out="$(run_plan_io "$dir" validate --schema "$unrecognized_schema")"; rc=$?
+assert_eq "I-2 unrecognized schema file: exit code" "1" "$rc"
+assert_eq "I-2 unrecognized schema file: ok" "False" "$(json_field "$out" 'd["ok"]')"
+reason="$(json_field "$out" 'd["reason"]')"
+assert_contains "I-2 unrecognized schema file: reason mentions recognized keys" "$reason" "recognized keys"
+
+# ---------------------------------------------------------------------------
+# regression: I-3 — isUnderBoundary normalizes via path.relative.
+# ---------------------------------------------------------------------------
+
+# app/../secret/x.py resolves OUTSIDE app/ -> must now be rejected
+dir="$(new_repo)"
+mutate_plan "$dir" 'plan["tasks"][0]["files"] = ["app/../secret/x.py"]'
+out="$(run_plan_io "$dir" validate)"; rc=$?
+assert_eq "I-3 traversal escapes boundary: exit code" "1" "$rc"
+assert_eq "I-3 traversal escapes boundary: ok" "False" "$(json_field "$out" 'd["ok"]')"
+errs="$(json_field "$out" '" ".join(d["data"]["errors"])')"
+assert_contains "I-3 traversal escapes boundary: mentions file" "$errs" "app/../secret/x.py"
+
+# ./app/main.py resolves INSIDE app/ -> must now be accepted
+dir="$(new_repo)"
+mutate_plan "$dir" 'plan["tasks"][0]["files"] = ["./app/main.py"]'
+out="$(run_plan_io "$dir" validate)"; rc=$?
+assert_eq "I-3 leading-./ form is accepted: exit code" "0" "$rc"
+assert_eq "I-3 leading-./ form is accepted: ok" "True" "$(json_field "$out" 'd["ok"]')"
+
+# ---------------------------------------------------------------------------
+# regression: M-1 — interrupt check happens BEFORE plan.json is read.
+# interrupt file present + plan.json missing -> halt interrupt (ok:true),
+# never a plan.json read error.
+# ---------------------------------------------------------------------------
+
+dir="$(mktemp -d -p "$tmproot")"
+( cd "$dir" && git init -q && git config user.email test@test.local && git config user.name test )
+mkdir -p "$dir/.claude/state"
+echo "operator paused the run" > "$dir/.claude/state/user-interrupt.md"
+out="$(run_plan_io "$dir" next)"; rc=$?
+assert_eq "M-1 interrupt before missing plan.json: exit code" "0" "$rc"
+assert_eq "M-1 interrupt before missing plan.json: ok" "True" "$(json_field "$out" 'd["ok"]')"
+assert_eq "M-1 interrupt before missing plan.json: halt" "interrupt" "$(json_field "$out" 'd["data"]["halt"]')"
 
 exit $fail
