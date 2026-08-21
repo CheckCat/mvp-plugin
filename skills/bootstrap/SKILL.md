@@ -59,7 +59,7 @@ FORBIDDEN_EDGE: <src-pattern> --> <dst-pattern>
 
 `backend=fastapi`:
 ```
-if [ -f pyproject.toml ]; then uv sync --frozen; fi
+if [ -f pyproject.toml ]; then uv sync --frozen --all-packages; fi
 if [ -f pyproject.toml ]; then uv run ruff check .; fi
 if [ -f pyproject.toml ]; then uv run ruff format --check .; fi
 if [ -n "$(find services -name node_modules -prune -o -name '*.py' -type f -print -quit 2>/dev/null)" ]; then uv run mypy services; fi
