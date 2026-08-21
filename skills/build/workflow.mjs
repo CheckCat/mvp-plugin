@@ -361,6 +361,52 @@
 //     `halt:'error'` via design note 9. relayLine() and RELAY_SCHEMA (the
 //     {line:string} envelope) are untouched — still used exactly as design
 //     note 2 describes for non-JSON commands.
+//
+// 19b. relay() FIELD-SHAPE DRIFT (round 2, empirical — live build smoke,
+//     task 002 rerun, journal evidence: `{"ok": true, "reason": "null",
+//     "hint": "null", "data": "{\n  \"task_id\": \"002\", ...}"}`). The
+//     structured-output layer is schema-VALID per RELAY_RESULT_SCHEMA (note
+//     19's deliberately permissive `{}` sub-schemas impose no type on
+//     reason/hint/data) but WRONG for every call site's assumption: a haiku
+//     relay agent returned `data` as a STRING of pretty-printed JSON instead
+//     of the JSON object the target command actually printed, and
+//     `reason`/`hint` as the LITERAL STRING "null" instead of JSON `null`
+//     when the underlying command left them absent. `adv.data.boundary`
+//     read as `undefined` off that string, and the implementer dispatch was
+//     (correctly) blocked downstream as boundary-less. This is note 19's
+//     transport-fragility risk recurring one layer up: not string-in-string
+//     re-escaping this time, but the agent silently re-stringifying a field
+//     it was asked to hand back as a real JSON value.
+//     Fix: `coerceRelayFields(out)` runs on every successful `agent()` call
+//     inside relay() before the result is accepted — `typeof out.data ===
+//     'string'` gets `JSON.parse`d (its failure is treated exactly like a
+//     missing/non-boolean `ok`: consumes the one retry, then throws, per
+//     the existing ladder), `out.reason`/`out.hint === 'null'` (the string)
+//     become real `null`, and a stringified `out.ok` ("true"/"false") is
+//     coerced to a real boolean defensively (not yet observed, but the same
+//     drift class — cheap to guard now rather than wait for a round 3).
+//     Schema vs. coercion, the actual call made here: RELAY_RESULT_SCHEMA's
+//     `data`/`reason`/`hint` STAY permissive `{}` rather than tightening to
+//     `data: {type:'object', additionalProperties:true}` — tempting, since
+//     that would reject a stringified `data` outright — because `data` is
+//     legitimately `null` on several real contract replies (see
+//     lib/*.{sh,py} headers: `"data":object|null`), and note 19 already
+//     ruled union `type` arrays (`type:['object','null']`) too risky to be
+//     the first union form handed to this sandbox's undocumented schema
+//     hook. Round 2 is exactly the evidence that would be needed to revisit
+//     that ruling, but this fix round chooses NOT to spend it on an
+//     unproven schema change when a coercion layer already closes the
+//     concrete failure observed — enforcement moves to application code
+//     (coerceRelayFields), which this file can test and reason about
+//     directly, instead of an opaque platform validator. If a future round
+//     needs to reject shapes coercion can't recover (e.g. `data` a string
+//     that ALSO fails to parse as JSON — already handled: treated as
+//     malformed, retried/thrown, never silently accepted), that is the
+//     trigger to revisit tightening the schema itself.
+//     Prompt also strengthened accordingly: it now says explicitly that
+//     `data` must be a JSON OBJECT (not a string of JSON) and `reason`/
+//     `hint` must be JSON `null` (not the string "null") — coercion is the
+//     enforcement backstop, not a substitute for asking correctly.
 
 export const meta = {
   name: 'mvp-build',
@@ -460,17 +506,41 @@ const RELAY_RESULT_SCHEMA = {
   additionalProperties: true,
 };
 
-// relay(cmd, opts) -> the platform-validated {ok,reason,hint,data} object,
-// straight from agent()'s structured output — no JSON.parse layer (design
-// note 19). For the lib scripts that always emit that contract on one
-// stdout line. `opts.retryable` (default true) gates whether a null/
-// malformed structured result (missing/non-boolean `ok`) gets one retry —
-// see design note 12: append/mutate-once commands pass `retryable: false`
-// and fail immediately instead of risking a duplicate side effect.
+// coerceRelayFields(out) -> out, mutated in place, with round-2 empirical
+// field-shape drift normalized (design note 19b): a haiku relay agent has
+// been observed returning `data` as a STRING of pretty-printed JSON
+// (instead of the JSON object RELAY_RESULT_SCHEMA and the prompt both ask
+// for) and `reason`/`hint` as the LITERAL STRING "null" (instead of JSON
+// `null`) when the underlying command left them absent — schema-valid under
+// the deliberately permissive `{}` sub-schemas (design note 19), but wrong
+// for every call site that reads `val.data.violations`/`fin.data.sha`/etc.
+// assuming a real object. Also defensively coerces a stringified `ok`
+// ("true"/"false") to a real boolean, the same drift class. Throws (never
+// swallows) if `data` is a string that fails to JSON.parse — the caller
+// treats that identically to a missing/malformed `ok`: one retry, then a
+// throw, per the existing retry ladder.
+function coerceRelayFields(out) {
+  if (typeof out.ok === 'string') out.ok = out.ok === 'true';
+  if (out.reason === 'null') out.reason = null;
+  if (out.hint === 'null') out.hint = null;
+  if (typeof out.data === 'string') out.data = JSON.parse(out.data);
+  return out;
+}
+
+// relay(cmd, opts) -> the platform-validated, field-coerced {ok,reason,hint,
+// data} object, straight from agent()'s structured output — no JSON.parse
+// of the WHOLE reply (design note 19; `data` alone may still need a nested
+// JSON.parse per coerceRelayFields, design note 19b). For the lib scripts
+// that always emit that contract on one stdout line. `opts.retryable`
+// (default true) gates whether a null/malformed structured result (missing/
+// non-boolean `ok` after coercion, OR a `data` string that fails to parse)
+// gets one retry — see design note 12: append/mutate-once commands pass
+// `retryable: false` and fail immediately instead of risking a duplicate
+// side effect.
 async function relay(cmd, opts = {}) {
   const retryable = opts.retryable !== false;
   const fullCmd = withCwd(cmd);
-  const prompt = `Run exactly this command via Bash from the current project root:\n${fullCmd}\nParse the LAST line of stdout as JSON and return that object via your structured output — copy every field verbatim (ok, reason, hint, data). Do not summarize, do not add fields of your own, do not run anything else.`;
+  const prompt = `Run exactly this command via Bash from the current project root:\n${fullCmd}\nParse the LAST line of stdout as JSON and return the parsed JSON object itself via structured output: "data" must be a JSON OBJECT (not a string of JSON), "reason"/"hint" must be JSON null (not the string "null") when absent. Copy every field verbatim (ok, reason, hint, data). Do not summarize, do not add fields of your own, do not run anything else.`;
   const callOpts = {
     model: 'haiku',
     effort: 'low',
@@ -479,18 +549,30 @@ async function relay(cmd, opts = {}) {
     phase: opts.phase,
   };
 
-  let out = await agent(prompt, callOpts);
-  if (out && typeof out.ok === 'boolean') return out;
+  const attempt = async () => {
+    const out = await agent(prompt, callOpts);
+    if (!out || (typeof out.ok !== 'boolean' && typeof out.ok !== 'string')) return null;
+    try {
+      const coerced = coerceRelayFields(out);
+      return typeof coerced.ok === 'boolean' ? coerced : null;
+    } catch (e) {
+      log(`relay: coerceRelayFields failed (data string did not parse as JSON) for cmd=${fullCmd}: ${e && e.message ? e.message : e}`);
+      return null;
+    }
+  };
+
+  let result = await attempt();
+  if (result) return result;
 
   if (!retryable) {
     throw new Error(
-      `relay: agent did not return a valid {ok:boolean,...} structured result (non-retryable command, no second attempt). cmd=${fullCmd} out=${JSON.stringify(out)}`,
+      `relay: agent did not return a valid, coercible {ok:boolean,...} structured result (non-retryable command, no second attempt). cmd=${fullCmd}`,
     );
   }
-  out = await agent(prompt, callOpts);
-  if (out && typeof out.ok === 'boolean') return out;
+  result = await attempt();
+  if (result) return result;
   throw new Error(
-    `relay: agent did not return a valid {ok:boolean,...} structured result after 1 retry. cmd=${fullCmd} out=${JSON.stringify(out)}`,
+    `relay: agent did not return a valid, coercible {ok:boolean,...} structured result after 1 retry. cmd=${fullCmd}`,
   );
 }
 
