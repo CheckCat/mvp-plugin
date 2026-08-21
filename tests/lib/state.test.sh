@@ -148,4 +148,71 @@ else
   fail=1
 fi
 
+# --- Test 5 (h): get without key -> exit 1 and valid JSON with ok:false (no traceback) ---
+
+STATE_DIR="$tmpdir" bash "$repo_root/lib/state.sh" get >/tmp/state-test-out 2>&1
+get_nokey_exit=$?
+get_nokey_output="$(cat /tmp/state-test-out)"
+
+if [ $get_nokey_exit -ne 0 ]; then
+  # Verify output is valid JSON with ok:false (no Python traceback)
+  if echo "$get_nokey_output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["ok"] is False' 2>/dev/null; then
+    # Ensure no "Traceback" or "IndexError" strings in output
+    if echo "$get_nokey_output" | grep -q "Traceback\|IndexError"; then
+      echo "FAIL: test 5 (get without key) output contains Python traceback: $get_nokey_output" >&2
+      fail=1
+    fi
+  else
+    echo "FAIL: test 5 (get without key) output not valid ok:false JSON: $get_nokey_output" >&2
+    fail=1
+  fi
+else
+  echo "FAIL: test 5 (get without key) expected exit non-zero, got $get_nokey_exit" >&2
+  fail=1
+fi
+
+# --- Test 6 (i): set without value -> exit 1 and valid JSON with ok:false (no traceback) ---
+
+STATE_DIR="$tmpdir" bash "$repo_root/lib/state.sh" set pending_critical >/tmp/state-test-out 2>&1
+set_novalue_exit=$?
+set_novalue_output="$(cat /tmp/state-test-out)"
+
+if [ $set_novalue_exit -ne 0 ]; then
+  # Verify output is valid JSON with ok:false (no Python traceback)
+  if echo "$set_novalue_output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["ok"] is False' 2>/dev/null; then
+    # Ensure no "Traceback" or "IndexError" strings in output
+    if echo "$set_novalue_output" | grep -q "Traceback\|IndexError"; then
+      echo "FAIL: test 6 (set without value) output contains Python traceback: $set_novalue_output" >&2
+      fail=1
+    fi
+  else
+    echo "FAIL: test 6 (set without value) output not valid ok:false JSON: $set_novalue_output" >&2
+    fail=1
+  fi
+else
+  echo "FAIL: test 6 (set without value) expected exit non-zero, got $set_novalue_exit" >&2
+  fail=1
+fi
+
+# --- Test 7 (i): state.json parses as valid JSON after set ---
+
+# Create fresh tmpdir for this test
+tmpdir3="$(mktemp -d)"
+trap 'rm -rf "$tmpdir3"' EXIT
+
+STATE_DIR="$tmpdir3" bash "$repo_root/lib/state.sh" init >/dev/null 2>&1
+STATE_DIR="$tmpdir3" bash "$repo_root/lib/state.sh" set test_key test_value >/dev/null 2>&1
+
+if [ -f "$tmpdir3/state.json" ]; then
+  if python3 -c "import json; json.load(open('$tmpdir3/state.json'))" 2>/dev/null; then
+    :
+  else
+    echo "FAIL: test 7 (state.json valid after set) state.json is corrupted: $(cat "$tmpdir3/state.json")" >&2
+    fail=1
+  fi
+else
+  echo "FAIL: test 7 (state.json valid after set) state.json not found" >&2
+  fail=1
+fi
+
 exit $fail
