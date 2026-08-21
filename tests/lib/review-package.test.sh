@@ -114,6 +114,54 @@ run_rp "$d_c" 001 --base HEAD
 assert_eq "(c) exit code" "1" "$RP_EXIT"
 assert_eq "(c) ok:false" "False" "$(json_field "$RP_OUT" 'd["ok"]')"
 
+# --- (d) uncommitted tracked change + untracked new file -> both appear -------
+# This is the ruling this rewrite exists for: skills/build/workflow.mjs's
+# implementer/fix agents never commit, so the package must show working-tree
+# state (not just committed history) — both a modified tracked file AND a
+# brand-new untracked file with its content inlined.
+
+d_d="$(new_git_repo)"
+echo 'v1' >"$d_d/app.py"
+(cd "$d_d" && git add app.py && git commit -q -m "chore: root commit")
+BASE_D="$(cd "$d_d" && git rev-parse HEAD)"
+
+# uncommitted tracked change (staged) — no new commit
+echo 'v2-uncommitted' >"$d_d/app.py"
+(cd "$d_d" && git add app.py)
+
+# untracked new file — never staged, never committed
+echo 'HELLO-NEW-FILE' >"$d_d/new_file.txt"
+
+run_rp "$d_d" 001 --base "$BASE_D"
+
+assert_eq "(d) exit code" "0" "$RP_EXIT"
+assert_eq "(d) ok:true" "True" "$(json_field "$RP_OUT" 'd["ok"]')"
+PATH_D="$(json_field "$RP_OUT" 'd["data"]["path"]')"
+FULL_PATH_D="$d_d/$PATH_D"
+
+if [ ! -f "$FULL_PATH_D" ]; then
+  echo "FAIL: (d) review file not written: $FULL_PATH_D" >&2
+  fail=1
+else
+  CONTENT_D="$(cat "$FULL_PATH_D")"
+  if ! printf '%s' "$CONTENT_D" | grep -q -- "-v1"; then
+    echo "FAIL: (d) missing uncommitted tracked-change removed-line (-v1)" >&2
+    fail=1
+  fi
+  if ! printf '%s' "$CONTENT_D" | grep -q -- "+v2-uncommitted"; then
+    echo "FAIL: (d) missing uncommitted tracked-change added-line (+v2-uncommitted)" >&2
+    fail=1
+  fi
+  if ! printf '%s' "$CONTENT_D" | grep -q "new_file.txt"; then
+    echo "FAIL: (d) untracked file name missing from package" >&2
+    fail=1
+  fi
+  if ! printf '%s' "$CONTENT_D" | grep -q "HELLO-NEW-FILE"; then
+    echo "FAIL: (d) untracked file CONTENT missing from package (must be inlined, not just named)" >&2
+    fail=1
+  fi
+fi
+
 # --- argv guard: missing task-id ----------------------------------------------
 
 d_arg1="$(new_git_repo)"

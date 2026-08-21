@@ -18,30 +18,46 @@
 //                                              script never calls Date/etc.
 //   budget                                    token-budget accessor; only
 //                                              `budget.spent()` is used here
-//                                              (see "Token-delta source").
+//                                              (see design note 7).
 //
 // ---------------------------------------------------------------------------
-// Design decisions (documented per task-14 instructions — read before
-// touching the ladders below):
+// Design decisions (documented per task-14 instructions, updated by a
+// controller review round — read before touching the ladders below):
 //
-// 1. ENTRY CONTRACT (inferred, not verified against a Workflow-runtime spec
-//    — no such spec exists in this repo; flagged for the controller to
-//    confirm at the Step-3 dry-run). `export const meta` is a pure literal.
-//    The workflow's actual logic is `export default async function run()`,
-//    reading `args`/`agent`/`log`/`budget` as ambient bindings (not
-//    parameters) and returning the `{halt, ...}` result the calling SKILL
-//    inspects. JS modules cannot `return` at top level, so an exported
-//    entry function is the only way to produce that return value.
+// 1. ENTRY CONTRACT (fix round, CRITICAL). The Workflow tool evaluates this
+//    module's BODY directly — there is no separate "call the exported entry
+//    function" step. The previous `export default async function run() {...}`
+//    was DEAD CODE: nothing in the documented hook contract ever invokes a
+//    default-exported function, so the whole task loop silently never ran.
+//    Fixed by making the loop a top-level-await IIFE whose settled value
+//    becomes the module's default export: `export default await (async () =>
+//    {...})();`. This means the loop genuinely executes as a side effect of
+//    the harness importing/evaluating this file (top-level await forces the
+//    IIFE to finish before module evaluation completes), and the resulting
+//    `{halt, ...}` object is readable as this module's default export the
+//    moment evaluation settles — no invocation step required, symmetric with
+//    how `meta` is read as a plain export. `args`/`agent`/`log`/`budget` are
+//    read as ambient bindings inside the IIFE, exactly as before. This is
+//    still the single biggest inferred-not-verified assumption in this file
+//    (no Workflow-tool runtime spec exists anywhere in this repo) — flagged
+//    again for the controller to confirm at the Step-3 dry-run. The whole
+//    IIFE body is wrapped in one try/catch (design note 9) so any internal
+//    `throw` becomes a `{halt:'error', detail}` return instead of an
+//    unhandled rejection.
 //
 // 2. relay() vs relayLine(). The brief's relay() sketch assumes the
 //    underlying command's stdout is itself one line of JSON (true for every
 //    lib/*.{mjs,sh,py} script: plan-io.mjs, validate-task.sh,
 //    review-package.sh, apply-patches.py — all emit the {ok,reason,hint,data}
 //    contract). But `git rev-parse HEAD` (needed for baseSha) is NOT JSON —
-//    it is a bare sha. relayLine(cmd) is the primitive: dispatch a haiku
-//    relay agent, return the raw last-stdout-line string. relay(cmd) wraps
-//    relayLine with JSON.parse (one retry on parse failure, per the brief),
-//    for the lib-script contract calls. baseSha uses relayLine directly.
+//    it is a bare sha — and park()'s `git checkout/restore/clean` reset line
+//    produces no JSON either (often no stdout at all). relayLine(cmd) is the
+//    primitive: dispatch a haiku relay agent, return the raw last-stdout-line
+//    string, no parsing. relay(cmd) wraps relayLine with JSON.parse (retried
+//    once by default — see design note 12 for when it is NOT retried), for
+//    the lib-script contract calls. baseSha and park()'s reset both use
+//    relayLine directly — using relay() on either was a CRITICAL bug (fix
+//    round): JSON.parse("") throws on every single park() call.
 //
 // 3. Template self-read prompts. This workflow never reads agents/*.md
 //    itself (no FS access). Each dispatch prompt instead tells the agent to
@@ -53,31 +69,34 @@
 //    workflow. Iron Law: "scripts move data" — plan-io.mjs has no
 //    "append Ruling"/"append blockers" verb, and this script has no FS
 //    access to write them directly even if it wanted to. DONE_WITH_CONCERNS
-//    text and park() reasons are carried in this function's RETURN VALUE
+//    text and park() reasons are carried in the workflow's RETURN VALUE
 //    (`concerns: [...]` on success, `detail` on a halt) for the calling
 //    SKILL (main session, which DOES have scripts/FS access) to persist
 //    through a script. This workflow stays a pure orchestrator.
 //
-// 5. Cross-file touch: lib/plan-io.mjs's `next` response gained a `files`
-//    key (the task's declared files from plan.json), with
-//    tests/lib/plan-io.test.sh updated to assert it. `next`'s payload had no
-//    files list, and validate-task.sh's --files must be the plan's declared
-//    list (not the implementer's self-reported FILES: line — that source
-//    lost fields before, per v1 lessons baked into this project's
-//    invariants). See that file's diff for the one-line addition.
+// 5. Cross-file touch: lib/plan-io.mjs's `next` response gained `files` (the
+//    task's declared files) and `title` (fix round, design note 11) keys,
+//    with tests/lib/plan-io.test.sh updated to assert both. validate-task.sh
+//    --files must be the plan's declared list (not the implementer's
+//    self-reported FILES: line — that source lost fields before, per v1
+//    lessons baked into this project's invariants); the commit subject needs
+//    a human-readable title, not just a bare id.
 //
 // 6. Caps: IMPLEMENTER_RETRY_CAP=1, TOTAL_ATTEMPTS_CAP=2 (1 initial + 1
 //    retry, never more), RE_REVIEW_CYCLES_CAP=1 (one fix -> re-review pass,
 //    never repeated — "NOT ADDRESSED" after that single pass parks).
 //
-// 7. Token-delta source: this workflow cannot measure a dispatched
-//    subagent's own token usage (only the harness knows that). `budget`s
-//    `.spent()` — if present — is read before and after each task; the
-//    difference is the honest, per-task delta passed to
-//    `plan-io.mjs complete --tokens`. If `budget.spent` is unavailable for
-//    any reason, this degrades to a delta of 0 (logged, never thrown — a
-//    missing budget accessor must not abort a task that otherwise
-//    succeeded).
+// 7. Token-delta source (fix round). This workflow cannot measure a
+//    dispatched subagent's own token usage (only the harness knows that).
+//    `budget.spent()` — if present — is read at the very START of each
+//    task's iteration (before baseSha capture / the implementer dispatch —
+//    moved there in the fix round; it was previously read AFTER the
+//    implementer had already run, silently excluding the single most
+//    expensive call from its own task's delta) and again right before
+//    `finalize`; the difference is the honest, per-task delta passed to
+//    `plan-io.mjs complete --tokens`. Degrades to a delta of 0 (logged, never
+//    thrown) if `budget.spent` isn't a function — a missing budget accessor
+//    must not abort an otherwise-successful task.
 //
 // 8. `phase(title)` (the global hook) is deliberately NOT called anywhere in
 //    this file. Every agent()/relay() call instead passes `phase` in its own
@@ -87,17 +106,56 @@
 //    intentionally sequential (see spec §1 non-goals — DAG parallelism is a
 //    future iteration), so batching hooks have nothing to batch.
 //
-// 9. Known grey zone (NOT fixed here — out of this task's file scope):
-//    lib/review-package.sh diffs `BASE..HEAD` (committed refs). Since
-//    implementer/fix agents leave their work uncommitted until `finalize`
-//    (per agents/implementer.md: "you do NOT git commit"), HEAD never moves
-//    between baseSha capture and the review step, so the review package can
-//    legitimately be an empty diff for an as-yet-uncommitted task. This is a
-//    property of lib/review-package.sh (Task 8, already review-clean) and
-//    plan-io.mjs/finalize.sh's single-commit-per-task design — not something
-//    this workflow can or should paper over. Reviewer prompts already handle
-//    "nothing to verify" gracefully (approve with empty findings). Flagged
-//    for the controller in the Task 14 report.
+// 9. Error handling (fix round, RULED): every internal fault that isn't a
+//    designed ladder outcome (a relay JSON-parse failure past its retry
+//    budget, review-package.sh/finalize.sh/ledger reporting ok:false) still
+//    `throw`s locally, but the top-level IIFE (design note 1) wraps its
+//    entire body in one try/catch that converts any such throw into
+//    `return {halt:'error', detail: e.message}` — never an unhandled
+//    rejection. Full halt vocabulary this module can return:
+//    all-done | dag-stuck | interrupt | dirty-tree | stop-and-ask | bad-args
+//    | error | null (null = ordinary completion, cap reached, nothing wrong).
+//
+// 10. lib/review-package.sh was rewritten in this fix round (controller
+//     ruling — authorized cross-file touch beyond plan-io.mjs): it used to
+//     diff `BASE..HEAD` (committed refs), but implementer/fix agents never
+//     `git commit` — HEAD never moves until `finalize` — so that diff was
+//     always empty. It now diffs BASE against the working tree (staged +
+//     unstaged tracked changes) and inlines untracked files' content
+//     (capped) since no `git diff` ever shows those. See that file's header
+//     for the full reasoning. tests/lib/review-package.test.sh gained a case
+//     covering an uncommitted tracked change + a new untracked file.
+//
+// 11. Quoting (fix round): every path-shaped value interpolated into a relay
+//     command string is double-quoted (`"${boundary}"`, `"${lib}/..."`,
+//     etc.) so a value containing a space or shell metacharacter can't split
+//     into extra argv words or get re-parsed by the shell the relay agent
+//     runs the command through. The one exception is `finalize.sh`'s
+//     `--files` list, which must stay as N separate shell-quoted arguments
+//     (`"f1" "f2" ...`), not one big quoted blob — folding the whole list
+//     into a single pair of quotes would turn N files into one argument and
+//     silently break the build-task scope's file staging.
+//
+// 12. relay() retryability (fix round, RULED): a JSON-parse-failure retry is
+//     safe only for read-only or overwrite-idempotent commands (plan-io.mjs
+//     next/validate-task.sh/review-package.sh/plan-io.mjs set-status — a
+//     second run produces the same end state). It is NOT safe for commands
+//     that APPEND or MUTATE-ONCE state: `apply-patches.py --stage` (a
+//     second run would try to re-apply an already-applied search/replace and
+//     spuriously fail as "not-found"), the combined
+//     `plan-io.mjs complete && finalize.sh build-task` (retrying could
+//     double-commit or double-log a telemetry event), and
+//     `plan-io.mjs ledger` (retrying would duplicate a ledger line). Those
+//     three call sites pass `retryable: false`; relay() then throws
+//     immediately on the first parse failure instead of trying again,
+//     surfacing as `{halt:'error', ...}` via design note 9.
+//
+// 13. Return-payload labeling (fix round): every returned outcome — every
+//     halt AND the ordinary-completion result — is stamped with
+//     `run_id`/`now` from `args`, merged on exactly once at the outermost
+//     return point, so the calling SKILL can label a ledger/blockers message
+//     with which run produced it without threading those two fields through
+//     every internal return site by hand.
 
 export const meta = {
   name: 'mvp-build',
@@ -120,7 +178,7 @@ const TOTAL_ATTEMPTS_CAP = 2; // 1 initial implementer dispatch + at most 1 retr
 // straight-line pass with no loop, so the cap is structural, not a runtime
 // check — there is nothing to compare a counter against.
 
-// --- module-scoped state set by run() after args validation ------------------
+// --- module-scoped state set inside the entry IIFE, right after args validation --
 
 let lib = ''; // args.plugin_root + '/lib', set once args are known-valid
 
@@ -133,8 +191,10 @@ const RELAY_SCHEMA = {
   additionalProperties: false,
 };
 
-// relayLine(cmd, opts) -> raw last-stdout-line string. Relays never receive
-// file contents — only the command to run and a one-line JSON reply back.
+// relayLine(cmd, opts) -> raw last-stdout-line string, unparsed. Relays never
+// receive file contents — only the command to run and a one-line JSON reply
+// back. Used directly (never via relay()'s JSON.parse layer) for commands
+// whose output is not itself JSON: `git rev-parse HEAD`, park()'s git reset.
 async function relayLine(cmd, opts = {}) {
   const prompt = `Run exactly this command via Bash from the current project root:\n${cmd}\nReturn the LAST line of stdout verbatim as {"line": "..."}. Do not add anything.`;
   const callOpts = {
@@ -153,14 +213,21 @@ async function relayLine(cmd, opts = {}) {
 
 // relay(cmd, opts) -> JSON.parse(relayLine(cmd, opts)). For the lib scripts
 // that always emit the {ok,reason,hint,data} contract on one stdout line.
-// One retry on a parse failure (the brief's instruction), then throws with
-// full context — a persistently unparsable relay reply is not a designed
-// ladder outcome, it is an infra fault.
+// `opts.retryable` (default true) gates whether a parse failure gets one
+// retry — see design note 12: append/mutate-once commands pass
+// `retryable: false` and fail immediately instead of risking a duplicate
+// side effect.
 async function relay(cmd, opts = {}) {
+  const retryable = opts.retryable !== false;
   let line = await relayLine(cmd, opts);
   try {
     return JSON.parse(line);
   } catch (e1) {
+    if (!retryable) {
+      throw new Error(
+        `relay: could not parse JSON stdout (non-retryable command, no second attempt). cmd=${cmd} line=${JSON.stringify(line)} error=${e1 && e1.message}`,
+      );
+    }
     line = await relayLine(cmd, opts);
     try {
       return JSON.parse(line);
@@ -174,31 +241,49 @@ async function relay(cmd, opts = {}) {
 
 // --- agent text dispatch -------------------------------------------------------
 
-// agentText(prompt, opts) -> string. agent() with no `schema` is documented
-// to return the agent's final free-text message, but the exact return shape
-// for the schema-less case is not pinned down anywhere in this sandbox's
-// contract, so this coerces defensively rather than assuming a bare string.
+// agentText(prompt, opts) -> string | null. agent() with no `schema` is
+// documented to return the agent's final free-text message, but the exact
+// return shape for the schema-less case is not pinned down anywhere in this
+// sandbox's contract, so this coerces defensively. A dead/unknown dispatch
+// target (agentType that doesn't exist) may resolve to `null`/`undefined`
+// rather than throwing — that is propagated as an explicit `null`, NOT
+// stringified to the literal text "null", so callers can null-guard it
+// (design note / fix round item 8).
 async function agentText(prompt, opts) {
   const res = await agent(prompt, opts);
+  if (res == null) return null;
   if (typeof res === 'string') return res;
-  if (res && typeof res.text === 'string') return res.text;
+  if (typeof res.text === 'string') return res.text;
   return JSON.stringify(res);
 }
 
-// dispatchAgentText(prompt, {model, phase, label, agentType}) -> string.
+// dispatchAgentText(prompt, {model, phase, label, agentType}) -> string | null.
 // agentType is only meaningful for role-specific project agents generated by
 // mvp:bootstrap (.claude/agents/<role>.md) — those exist only in the TARGET
-// project, not universally, so a dispatch error with a given agentType falls
-// back once to 'general-purpose' rather than failing the whole task.
+// project, not universally. A dispatch that throws OR resolves to
+// null/undefined for a given agentType is retried once as 'general-purpose'.
+// If BOTH attempts fail/return nothing, this returns `null` — every call
+// site null-guards the result and parks rather than letting a null flow into
+// a STATUS/VERDICT regex (fix round item 8).
 async function dispatchAgentText(prompt, { model, phase, label, agentType }) {
   const opts = { model, phase, label };
   if (!agentType) return agentText(prompt, opts);
-  try {
-    return await agentText(prompt, { ...opts, agentType });
-  } catch (e) {
-    log(`agent dispatch with agentType=${agentType} failed (${e && e.message ? e.message : e}); retrying as general-purpose`);
-    return agentText(prompt, { ...opts, agentType: 'general-purpose' });
+
+  const attempt = async (type) => {
+    try {
+      return await agentText(prompt, { ...opts, agentType: type });
+    } catch (e) {
+      log(`agent dispatch with agentType=${type} threw (${e && e.message ? e.message : e})`);
+      return null;
+    }
+  };
+
+  let res = await attempt(agentType);
+  if (res == null) {
+    log(`agent dispatch with agentType=${agentType} returned no result (dead/unknown agentType or a throw); retrying as general-purpose`);
+    res = await attempt('general-purpose');
   }
+  return res;
 }
 
 // --- prompt builders (template self-read — see design note 3) ----------------
@@ -263,18 +348,48 @@ function parseStatus(text) {
   return m ? m[1] : 'BLOCKED';
 }
 
+// extractField(text, label) -> the rest of the SAME line after "<LABEL>: ",
+// trimmed, or null if the label never appears at the start of a line. For
+// single-token contract fields (STATUS, VERDICT) which are guaranteed
+// single-line by every template's contract.
 function extractField(text, label) {
   const re = new RegExp(`^${label}:\\s*(.*)$`, 'm');
   const m = re.exec(text || '');
   return m ? m[1].trim() : null;
 }
 
-function safeJsonParse(s, fallback) {
-  try {
-    return JSON.parse(s);
-  } catch {
-    return fallback;
+// extractJsonField(text, label) -> {found, value}. `found` is true iff
+// "<LABEL>:" appears at the start of a line; `value` is the parsed JSON, or
+// null if present-but-unparseable. Unlike extractField, this tolerates the
+// JSON value spanning MULTIPLE lines: templates ask agents for single-line
+// JSON (PATCHES/FINDINGS), but real replies sometimes pretty-print despite
+// the instruction. Strategy: starting from the label's own line, accumulate
+// one more line at a time and try JSON.parse on the growing trimmed buffer;
+// stop accumulating (and give up) once a line that looks like the START of
+// another ALL-CAPS contract token (e.g. "STATUS:", "VERDICT:") is hit, since
+// that means the JSON block already ended without ever parsing.
+function extractJsonField(text, label) {
+  const re = new RegExp(`^${label}:[ \\t]*`, 'm');
+  const m = re.exec(text || '');
+  if (!m) return { found: false, value: null };
+
+  const rest = (text || '').slice(m.index + m[0].length);
+  const lines = rest.split('\n');
+  let acc = '';
+  for (let i = 0; i < lines.length; i++) {
+    acc += (i > 0 ? '\n' : '') + lines[i];
+    const trimmed = acc.trim();
+    if (trimmed) {
+      try {
+        return { found: true, value: JSON.parse(trimmed) };
+      } catch {
+        // keep accumulating unless the next line starts a new contract token
+      }
+    }
+    const next = lines[i + 1];
+    if (next !== undefined && /^[A-Z][A-Z_-]*:/.test(next)) break;
   }
+  return { found: true, value: null };
 }
 
 function extractConcernLines(text) {
@@ -288,9 +403,9 @@ function extractConcernLines(text) {
 // validator.md replies PATCHES:<json> OR VERDICT: retry|park. Anything
 // unparseable defaults to a 'park' verdict — fail closed, not open.
 function parseValidatorVerdict(text) {
-  const patchesRaw = extractField(text, 'PATCHES');
-  if (patchesRaw !== null) {
-    return { kind: 'patches', patches: safeJsonParse(patchesRaw, []) };
+  const patches = extractJsonField(text, 'PATCHES');
+  if (patches.found && Array.isArray(patches.value)) {
+    return { kind: 'patches', patches: patches.value };
   }
   const verdictRaw = extractField(text, 'VERDICT');
   const word = verdictRaw && /^(retry|park)/i.exec(verdictRaw);
@@ -299,24 +414,25 @@ function parseValidatorVerdict(text) {
 
 // reviewer.md replies VERDICT: approve|request-changes + FINDINGS:<json>, OR
 // PATCHES:<json> for an all-trivial batch. Unparseable defaults to
-// 'request-changes' with no findings — fail closed (routes to a human-scoped
-// fix/park path rather than a silent approve).
+// 'request-changes' with no findings — the caller (runReviewLadder) treats
+// request-changes-with-empty-findings as fail-closed park, not a silent
+// fix-dispatch with nothing to act on (fix round item 5).
 function parseReviewerVerdict(text) {
-  const patchesRaw = extractField(text, 'PATCHES');
-  if (patchesRaw !== null) {
-    return { kind: 'patches', patches: safeJsonParse(patchesRaw, []) };
+  const patches = extractJsonField(text, 'PATCHES');
+  if (patches.found && Array.isArray(patches.value)) {
+    return { kind: 'patches', patches: patches.value };
   }
   const verdictRaw = extractField(text, 'VERDICT');
-  const findingsRaw = extractField(text, 'FINDINGS');
-  const findings = findingsRaw !== null ? safeJsonParse(findingsRaw, []) : [];
+  const findings = extractJsonField(text, 'FINDINGS');
+  const findingsArr = Array.isArray(findings.value) ? findings.value : [];
   const word = verdictRaw && /^(approve|request-changes)/i.exec(verdictRaw);
-  return { kind: 'verdict', verdict: word ? word[1].toLowerCase() : 'request-changes', findings };
+  return { kind: 'verdict', verdict: word ? word[1].toLowerCase() : 'request-changes', findings: findingsArr };
 }
 
 // re-review.md replies FINDINGS:<json array with a "verdict" field per item>
 function parseReReview(text) {
-  const findingsRaw = extractField(text, 'FINDINGS');
-  return findingsRaw !== null ? safeJsonParse(findingsRaw, []) : [];
+  const findings = extractJsonField(text, 'FINDINGS');
+  return Array.isArray(findings.value) ? findings.value : [];
 }
 
 // --- patches application (shared by the validate and review ladders) ---------
@@ -324,18 +440,21 @@ function parseReReview(text) {
 // applyPatchesFlow: the workflow writes patches.json itself, via a dedicated
 // haiku agent using the Write tool (never a heredoc — patches.json can
 // contain arbitrary code text that must not be shell-interpolated). Then a
-// relay stages the apply. A partial/failed apply is logged, not thrown — the
-// caller's next validate/review step is the real judge of whether the state
-// is now acceptable.
+// NON-RETRYABLE relay stages the apply (design note 12 — re-running an
+// already-applied patch batch would spuriously fail). Returns the relay
+// result; callers decide whether a failed apply is fatal (validate path
+// re-validates and lets that be the judge; review path parks directly on a
+// failed apply — fix round item 6).
 async function applyPatchesFlow(id, patches, phaseTitle) {
   const patchesPath = `.claude/state/patches-${id}.json`;
   await agent(
     `Write EXACTLY this JSON to ${patchesPath} using the Write tool (create the file, overwrite any existing content, no extra text, no markdown code fences):\n${JSON.stringify(patches)}`,
     { model: 'haiku', effort: 'low', phase: phaseTitle, label: `patch-writer-${id}` },
   );
-  const applyResult = await relay(`python3 ${lib}/apply-patches.py ${patchesPath} --stage`, {
+  const applyResult = await relay(`python3 "${lib}/apply-patches.py" "${patchesPath}" --stage`, {
     phase: phaseTitle,
     label: `apply-patches-${id}`,
+    retryable: false,
   });
   if (!applyResult.ok) {
     log(`apply-patches.py reported failures for task ${id}: ${JSON.stringify(applyResult.data)}`);
@@ -360,13 +479,12 @@ function safeBudgetSpent() {
 // --- validate ladder -----------------------------------------------------------
 
 // Returns {parked:false} on success, or {parked:true, why} to park the task.
-// Ladder (design note in the file header + task-14 report): a validator
-// PATCHES verdict gets one direct apply+re-validate attempt that does NOT
-// consume the implementer-retry budget; a 'retry' verdict (or a patch that
-// still leaves violations) falls through to the single capped implementer
-// retry; anything still failing after that parks.
+// Ladder: a validator PATCHES verdict gets one direct apply+re-validate
+// attempt that does NOT consume the implementer-retry budget; a 'retry'
+// verdict (or a patch that still leaves violations) falls through to the
+// single capped implementer retry; anything still failing after that parks.
 async function runValidateLadder(ctx) {
-  const validateCmd = () => `bash ${lib}/validate-task.sh ${ctx.id} --boundary ${ctx.boundary} --files ${ctx.filesCsv}`;
+  const validateCmd = () => `bash "${lib}/validate-task.sh" "${ctx.id}" --boundary "${ctx.boundary}" --files "${ctx.filesCsv}"`;
 
   let val = await relay(validateCmd(), { phase: 'Validate', label: `validate-${ctx.id}-1` });
   if (val.ok) return { parked: false };
@@ -403,6 +521,9 @@ async function runValidateLadder(ctx) {
     label: `implementer-retry-${ctx.id}`,
     agentType: ctx.agentType,
   });
+  if (retryText == null) {
+    return { parked: true, why: 'implementer retry dispatch failed: both agentType and general-purpose fallback returned no result' };
+  }
   const retryStatus = parseStatus(retryText);
   if (retryStatus === 'BLOCKED' || retryStatus === 'NEEDS_CONTEXT') {
     return { parked: true, why: `implementer retry ${retryStatus}: ${retryText.slice(0, 400)}` };
@@ -421,7 +542,7 @@ async function runValidateLadder(ctx) {
 // Returns {parked:false} on success (approve, or a trivial-patches shortcut),
 // or {parked:true, why}. One fix -> re-review cycle, capped, never repeated.
 async function runReviewLadder(ctx) {
-  const packageCmd = () => `bash ${lib}/review-package.sh ${ctx.id} --base ${ctx.baseSha}`;
+  const packageCmd = () => `bash "${lib}/review-package.sh" "${ctx.id}" --base "${ctx.baseSha}"`;
 
   let rp = await relay(packageCmd(), { phase: 'Review', label: `review-package-${ctx.id}-1` });
   if (!rp.ok) throw new Error(`review-package.sh failed for task ${ctx.id}: ${rp.reason || 'unknown'}`);
@@ -435,18 +556,36 @@ async function runReviewLadder(ctx) {
   if (verdict.kind === 'patches') {
     // Reviewer judged every finding trivial-mechanical: apply directly, no
     // fix-dispatch / re-review round (per agents/reviewer.md's own contract).
-    await applyPatchesFlow(ctx.id, verdict.patches, 'Review');
+    // A failed apply here has no re-validate step to catch it (unlike the
+    // validate-ladder's patches path) — park directly (fix round item 6).
+    const applyResult = await applyPatchesFlow(ctx.id, verdict.patches, 'Review');
+    if (!applyResult.ok) {
+      return { parked: true, why: `review PATCHES apply failed: ${JSON.stringify(applyResult.data)}` };
+    }
     return { parked: false };
   }
   if (verdict.verdict === 'approve') {
     return { parked: false };
   }
 
-  // request-changes: exactly one fix -> re-review cycle (RE_REVIEW_CYCLES_CAP).
+  // request-changes with no findings is unparseable/malformed — fail closed
+  // rather than dispatching fix.md with an empty findings array (nothing for
+  // it to act on; "empty findings, please fix" is not a real fix task).
+  if (!verdict.findings || verdict.findings.length === 0) {
+    return {
+      parked: true,
+      why: `reviewer VERDICT: request-changes but FINDINGS was empty or unparseable — raw reply: ${(reviewText || '').slice(0, 400)}`,
+    };
+  }
+
+  // request-changes with real findings: exactly one fix -> re-review cycle.
   const fixText = await dispatchAgentText(
     fixPrompt({ taskId: ctx.id, boundary: ctx.boundary, findings: verdict.findings, reportPath: ctx.reportPath }),
     { model: 'sonnet', phase: 'Review', label: `fix-${ctx.id}`, agentType: ctx.agentType },
   );
+  if (fixText == null) {
+    return { parked: true, why: 'fix dispatch failed: both agentType and general-purpose fallback returned no result' };
+  }
   const fixStatus = parseStatus(fixText);
   if (fixStatus === 'BLOCKED' || fixStatus === 'NEEDS_CONTEXT') {
     return { parked: true, why: `fix ${fixStatus}: ${fixText.slice(0, 400)}` };
@@ -460,6 +599,9 @@ async function runReviewLadder(ctx) {
     reReviewPrompt({ taskId: ctx.id, packagePath: rp.data.path, findings: verdict.findings }),
     { model: 'sonnet', phase: 'Review', label: `re-review-${ctx.id}` },
   );
+  if (reReviewText == null) {
+    return { parked: true, why: 're-review dispatch failed: agent returned no result' };
+  }
   const verdicted = parseReReview(reReviewText);
   const stillOpen = verdicted.filter((f) => String(f && f.verdict).toUpperCase() !== 'ADDRESSED');
   if (stillOpen.length > 0) {
@@ -472,25 +614,29 @@ async function runReviewLadder(ctx) {
 // --- finalize ---------------------------------------------------------------------
 
 async function finalize(id, title, declaredFiles, tokensDelta, phaseTitle) {
-  const subject = title ? `feat: task ${id} ${title}` : `feat: task ${id}`;
+  const subject = title ? `feat: task ${id}: ${title}` : `feat: task ${id}`;
   const msgPath = `.claude/state/commit-msg-${id}.txt`;
   await agent(
     `Write EXACTLY this text to ${msgPath} using the Write tool (create the file, overwrite any existing content, no extra text, no markdown code fences):\n${subject}\n`,
     { model: 'haiku', effort: 'low', phase: phaseTitle, label: `msg-writer-${id}` },
   );
 
-  const filesSpaceList = declaredFiles.join(' ');
+  // Each file gets its own quotes — folding the whole space-joined list into
+  // ONE pair of quotes would turn N files into a single argument and break
+  // finalize.sh build-task's --files staging (design note 11).
+  const filesSpaceList = declaredFiles.map((f) => `"${f}"`).join(' ');
   const fin = await relay(
-    `node ${lib}/plan-io.mjs complete ${id} --tokens ${tokensDelta} && bash ${lib}/finalize.sh build-task ${msgPath} --files ${filesSpaceList}`,
-    { phase: phaseTitle, label: `finalize-${id}` },
+    `node "${lib}/plan-io.mjs" complete "${id}" --tokens ${tokensDelta} && bash "${lib}/finalize.sh" build-task "${msgPath}" --files ${filesSpaceList}`,
+    { phase: phaseTitle, label: `finalize-${id}`, retryable: false },
   );
   if (!fin.ok) {
     throw new Error(`finalize failed for task ${id}: ${fin.reason || 'unknown'}`);
   }
 
-  const ledgerResult = await relay(`node ${lib}/plan-io.mjs ledger --task ${id} --sha ${fin.data.sha}`, {
+  const ledgerResult = await relay(`node "${lib}/plan-io.mjs" ledger --task "${id}" --sha "${fin.data.sha}"`, {
     phase: phaseTitle,
     label: `ledger-${id}`,
+    retryable: false,
   });
   if (!ledgerResult.ok) {
     throw new Error(`ledger failed for task ${id}: ${ledgerResult.reason || 'unknown'}`);
@@ -501,17 +647,23 @@ async function finalize(id, title, declaredFiles, tokensDelta, phaseTitle) {
 // --- park ---------------------------------------------------------------------
 
 // park(id, boundary, why): clean the working tree back to HEAD within the
-// task's boundary, mark it failed via plan-io.mjs (the only mutating,
-// park-safe subcommand — plan-io has no dedicated "park" verb), and return a
-// stop-and-ask halt. Per design note 4, the Ruling/Parked ledger line and
-// blockers.md entry are the calling SKILL's job, driven off this halt's
-// `detail` — this workflow never writes prose files itself.
+// task's boundary — including untracked files the implementer created
+// (`git clean -fd`, fix round item 2/7: without it, an untracked file left
+// behind would make every subsequent `plan-io next` halt dirty-tree forever)
+// — mark it failed via plan-io.mjs (the only mutating, park-safe subcommand
+// — plan-io has no dedicated "park" verb), and return a stop-and-ask halt.
+// The reset line's output is not JSON (often no output at all), so this uses
+// relayLine, NOT relay — using relay() here was a CRITICAL bug (fix round):
+// JSON.parse("") threw on every single park() call. Per design note 4, the
+// Ruling/Parked ledger line and blockers.md entry are the calling SKILL's
+// job, driven off this halt's `detail` — this workflow never writes prose
+// files itself.
 async function park(id, boundary, why) {
-  await relay(`git checkout -- ${boundary} 2>/dev/null; git restore --staged ${boundary} 2>/dev/null; true`, {
-    phase: 'Finalize',
-    label: `park-clean-${id}`,
-  });
-  const statusResult = await relay(`node ${lib}/plan-io.mjs set-status ${id} failed`, {
+  await relayLine(
+    `git checkout -- "${boundary}" 2>/dev/null; git restore --staged "${boundary}" 2>/dev/null; git clean -fd -- "${boundary}" 2>/dev/null; true`,
+    { phase: 'Finalize', label: `park-clean-${id}` },
+  );
+  const statusResult = await relay(`node "${lib}/plan-io.mjs" set-status "${id}" failed`, {
     phase: 'Finalize',
     label: `park-status-${id}`,
   });
@@ -529,10 +681,17 @@ async function runOneTask(adv) {
   const boundary = adv.data.boundary;
   const role = adv.data.role;
   const modelClass = adv.data.model_class;
-  const title = adv.data.title; // not present in plan-io.mjs's `next` payload today; fallback below
+  const title = adv.data.title; // added to plan-io.mjs's `next` payload in the fix round
   const declaredFiles = Array.isArray(adv.data.files) ? adv.data.files : [];
   const filesCsv = declaredFiles.join(',');
   const reportPath = `.claude/state/reports/task-${id}.md`;
+
+  // Token-delta measurement starts here, at the very top of the task
+  // iteration — BEFORE baseSha capture and the implementer dispatch (fix
+  // round item 4: it previously started only after the implementer had
+  // already run, silently excluding that call's cost from its own task's
+  // delta).
+  const spentBefore = safeBudgetSpent();
 
   const baseSha = await relayLine('git rev-parse HEAD', { phase: 'Advance', label: `basesha-${id}` });
 
@@ -544,6 +703,9 @@ async function runOneTask(adv) {
     label: `implementer-${id}`,
     agentType: role,
   });
+  if (implText == null) {
+    return park(id, boundary, 'implementer dispatch failed: both agentType and general-purpose fallback returned no result');
+  }
 
   const concerns = [];
   const status = parseStatus(implText);
@@ -553,8 +715,6 @@ async function runOneTask(adv) {
   if (status === 'DONE_WITH_CONCERNS') concerns.push(extractConcernLines(implText));
 
   const ctx = { id, boundary, filesCsv, briefPath, reportPath, agentType: role, attempts: 1, concerns, baseSha };
-
-  const spentBefore = safeBudgetSpent();
 
   const valOutcome = await runValidateLadder(ctx);
   if (valOutcome.parked) return park(id, boundary, valOutcome.why);
@@ -587,39 +747,55 @@ function validateArgs(a) {
 }
 
 // --- entry point ---------------------------------------------------------------
+//
+// Top-level-await IIFE, not an exported function (design note 1 — the
+// exported-function form was dead code, never invoked by anything). Its
+// settled value becomes this module's default export. The whole body is one
+// try/catch (design note 9): any internal throw becomes {halt:'error', ...}
+// instead of an unhandled rejection. `run_id`/`now` are stamped onto
+// whatever the inner logic returns at the single outer return point (design
+// note 13) so every outcome — halts included — carries run labeling.
 
-export default async function run() {
-  const badArgs = validateArgs(args);
-  if (badArgs) return badArgs;
+export default await (async () => {
+  const inner = await (async () => {
+    try {
+      const badArgs = validateArgs(args);
+      if (badArgs) return badArgs;
 
-  lib = `${args.plugin_root}/lib`;
+      lib = `${args.plugin_root}/lib`;
 
-  const results = [];
-  let tasksDone = 0;
+      const results = [];
+      let tasksDone = 0;
 
-  while (tasksDone < args.max_tasks) {
-    const nextCmd = `node ${lib}/plan-io.mjs next${args.task_id ? ` --task ${args.task_id}` : ''}`;
-    const adv = await relay(nextCmd, { phase: 'Advance', label: `advance-${tasksDone}` });
-    if (!adv.ok) {
-      throw new Error(`plan-io.mjs next failed: ${adv.reason || 'unknown'}`);
+      while (tasksDone < args.max_tasks) {
+        const nextCmd = `node "${lib}/plan-io.mjs" next${args.task_id ? ` --task "${args.task_id}"` : ''}`;
+        const adv = await relay(nextCmd, { phase: 'Advance', label: `advance-${tasksDone}` });
+        if (!adv.ok) {
+          throw new Error(`plan-io.mjs next failed: ${adv.reason || 'unknown'}`);
+        }
+        if (adv.data && adv.data.halt) {
+          // all-done | dag-stuck | interrupt | dirty-tree — propagate
+          // verbatim, the calling SKILL owns the halt-table dispatch.
+          return { halt: adv.data.halt, detail: adv.data.detail };
+        }
+
+        const outcome = await runOneTask(adv);
+        if (outcome.halt) return outcome; // park() propagates its stop-and-ask halt directly
+
+        results.push({ task_id: outcome.task_id, sha: outcome.sha, tokens_delta: outcome.tokens_delta, concerns: outcome.concerns });
+        tasksDone += 1;
+        if (args.task_id) break;
+      }
+
+      // Ordinary completion: the requested cap (--tasks N, or a single
+      // --task <id>) was reached with no ladder failure. halt: null — not
+      // part of the operator-attention halt vocabulary (design note 9).
+      return { halt: null, tasks_done: tasksDone, results };
+    } catch (e) {
+      log(`workflow error: ${e && e.stack ? e.stack : e}`);
+      return { halt: 'error', detail: e && e.message ? e.message : String(e) };
     }
-    if (adv.data && adv.data.halt) {
-      // all-done | dag-stuck | interrupt | dirty-tree — propagate verbatim,
-      // the calling SKILL owns the halt-table dispatch.
-      return { halt: adv.data.halt, detail: adv.data.detail };
-    }
+  })();
 
-    const outcome = await runOneTask(adv);
-    if (outcome.halt) return outcome; // park() propagates its stop-and-ask halt directly
-
-    results.push({ task_id: outcome.task_id, sha: outcome.sha, tokens_delta: outcome.tokens_delta, concerns: outcome.concerns });
-    tasksDone += 1;
-    if (args.task_id) break;
-  }
-
-  // Normal, non-urgent completion: the requested cap (--tasks N, or a single
-  // --task <id>) was reached with no ladder failure. Distinct from the
-  // all-done/dag-stuck/interrupt/dirty-tree halt vocabulary — this is
-  // success, not something needing an AskUserQuestion.
-  return { halt: 'tasks-cap', tasks_done: tasksDone, results };
-}
+  return { ...inner, run_id: args?.run_id, now: args?.now };
+})();
