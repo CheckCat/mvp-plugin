@@ -231,6 +231,28 @@
 //     If the noise proves genuinely disruptive at the dry-run, the fix is a
 //     one-line `.claude/state/.gitignore` added to make-dryrun.sh, not a
 //     change to review-package.sh itself.
+//
+// 16. args may arrive STRINGIFIED (round 4, empirical — controller dry-run
+//     attempt #2 returned `{"halt":"bad-args","detail":"missing required
+//     arg(s): run_id, now, plugin_root"}` even though the SKILL demonstrably
+//     passed all three; diagnostics showed the harness delivered `args` as
+//     a JSON-ENCODED STRING, e.g. `"{\"run_id\": ...}"`, not an object — so
+//     `args.run_id` read as `undefined` off a String instance, and every
+//     field looked "missing" to validateArgs). Fixed by coercing ONCE, as
+//     the very first statement inside the entry point's try block, before
+//     validateArgs or anything else reads a field: `if (typeof args ===
+//     'string')`, `JSON.parse` it into the module-scoped `argv`; a parse
+//     failure sets `argv = {}` and returns a `bad-args` halt whose `detail`
+//     names the string form (so a genuinely malformed payload is
+//     distinguishable from a merely-missing-field one). If `args` is
+//     already an object (the normal, expected shape), `argv = args`
+//     directly — no behavior change from rounds 1-3. From this point on,
+//     EVERY reference to a workflow argument anywhere in this file reads
+//     `argv`, never the ambient `args` binding — `withCwd()`,
+//     `cwdPrefixLine()`, all five template-self-read prompt builders,
+//     `withRunLabels()`, and the entry point's own `plugin_root`/
+//     `max_tasks`/`task_id` reads. `args` itself is referenced in exactly
+//     one place now: the `typeof args === 'string'` coercion check.
 
 export const meta = {
   name: 'mvp-build',
@@ -253,9 +275,15 @@ const TOTAL_ATTEMPTS_CAP = 2; // 1 initial implementer dispatch + at most 1 retr
 // straight-line pass with no loop, so the cap is structural, not a runtime
 // check — there is nothing to compare a counter against.
 
-// --- module-scoped state set inside the entry IIFE, right after args validation --
+// --- module-scoped state set at the top of the entry point, before anything else --
 
-let lib = ''; // args.plugin_root + '/lib', set once args are known-valid
+let lib = ''; // argv.plugin_root + '/lib', set once argv is known-valid
+// argv: the COERCED args object (design note 16, round 4) — see the entry
+// point below. Every reference in this file that needs a workflow argument
+// reads `argv`, never the ambient `args` binding directly (the one
+// exception is the coercion check itself, which must inspect `args` to
+// decide whether it needs parsing at all).
+let argv = {};
 
 // --- relay primitives ---------------------------------------------------------
 
@@ -267,22 +295,22 @@ const RELAY_SCHEMA = {
 };
 
 // withCwd(cmd) -> cmd, prefixed with `cd "<project_root>" && ` when
-// args.project_root is set (design note 14). No-op (returns cmd unchanged)
+// argv.project_root is set (design note 14). No-op (returns cmd unchanged)
 // in the common case where the calling session's cwd already IS the target
 // project root.
 function withCwd(cmd) {
-  return args.project_root ? `cd "${args.project_root}" && ${cmd}` : cmd;
+  return argv.project_root ? `cd "${argv.project_root}" && ${cmd}` : cmd;
 }
 
 // cwdPrefixLine() -> a prompt-prefix line for non-relay agent dispatches
-// (design note 14), or '' when args.project_root is unset. Every dispatched
+// (design note 14), or '' when argv.project_root is unset. Every dispatched
 // agent (implementer, validator, reviewer, fix, re-review, patch-writer,
 // commit-msg-writer) reads paths that are relative to the target project
 // root and has no other way to learn what that root is when it differs from
 // the controller session's own cwd.
 function cwdPrefixLine() {
-  return args.project_root
-    ? `Work from directory: ${args.project_root} (cd there before any command; all relative paths are relative to it).\n\n`
+  return argv.project_root
+    ? `Work from directory: ${argv.project_root} (cd there before any command; all relative paths are relative to it).\n\n`
     : '';
 }
 
@@ -386,7 +414,7 @@ async function dispatchAgentText(prompt, { model, phase, label, agentType }) {
 
 function implementerPrompt({ briefPath, boundary, taskId, reportPath }) {
   return cwdPrefixLine() + [
-    `Read ${args.plugin_root}/skills/build/agents/implementer.md and follow it exactly with these substitutions:`,
+    `Read ${argv.plugin_root}/skills/build/agents/implementer.md and follow it exactly with these substitutions:`,
     `BRIEF_PATH=${briefPath}`,
     `BOUNDARY=${boundary}`,
     `TASK_ID=${taskId}`,
@@ -400,7 +428,7 @@ function implementerRetryPrompt(basePrompt, violations) {
 
 function validatorPrompt({ taskId, boundary, violations }) {
   return cwdPrefixLine() + [
-    `Read ${args.plugin_root}/skills/build/agents/validator.md and follow it exactly with these substitutions:`,
+    `Read ${argv.plugin_root}/skills/build/agents/validator.md and follow it exactly with these substitutions:`,
     `TASK_ID=${taskId}`,
     `BOUNDARY=${boundary}`,
     `VIOLATIONS=${JSON.stringify(violations)}`,
@@ -409,7 +437,7 @@ function validatorPrompt({ taskId, boundary, violations }) {
 
 function reviewerPrompt({ taskId, briefPath, packagePath }) {
   return cwdPrefixLine() + [
-    `Read ${args.plugin_root}/skills/build/agents/reviewer.md and follow it exactly with these substitutions:`,
+    `Read ${argv.plugin_root}/skills/build/agents/reviewer.md and follow it exactly with these substitutions:`,
     `TASK_ID=${taskId}`,
     `BRIEF_PATH=${briefPath}`,
     `PACKAGE_PATH=${packagePath}`,
@@ -418,7 +446,7 @@ function reviewerPrompt({ taskId, briefPath, packagePath }) {
 
 function fixPrompt({ taskId, boundary, findings, reportPath }) {
   return cwdPrefixLine() + [
-    `Read ${args.plugin_root}/skills/build/agents/fix.md and follow it exactly with these substitutions:`,
+    `Read ${argv.plugin_root}/skills/build/agents/fix.md and follow it exactly with these substitutions:`,
     `TASK_ID=${taskId}`,
     `BOUNDARY=${boundary}`,
     `FINDINGS=${JSON.stringify(findings)}`,
@@ -428,7 +456,7 @@ function fixPrompt({ taskId, boundary, findings, reportPath }) {
 
 function reReviewPrompt({ taskId, packagePath, findings }) {
   return cwdPrefixLine() + [
-    `Read ${args.plugin_root}/skills/build/agents/re-review.md and follow it exactly with these substitutions:`,
+    `Read ${argv.plugin_root}/skills/build/agents/re-review.md and follow it exactly with these substitutions:`,
     `TASK_ID=${taskId}`,
     `PACKAGE_PATH=${packagePath}`,
     `FINDINGS=${JSON.stringify(findings)}`,
@@ -849,13 +877,13 @@ function validateArgs(a) {
 }
 
 // withRunLabels(result) -> result, stamped with run_id/now (and project_root
-// when provided) from args. Called at every return site below, since (per
-// design note 1, round 3) there is no single outer wrapper to merge these in
-// once anymore — the runner supplies its own wrapper function, and this
-// script's body runs directly inside it.
+// when provided) from argv (the coerced args — design note 16). Called at
+// every return site below, since (per design note 1, round 3) there is no
+// single outer wrapper to merge these in once anymore — the runner supplies
+// its own wrapper function, and this script's body runs directly inside it.
 function withRunLabels(result) {
-  const labels = { run_id: args?.run_id, now: args?.now };
-  if (args?.project_root) labels.project_root = args.project_root;
+  const labels = { run_id: argv?.run_id, now: argv?.now };
+  if (argv?.project_root) labels.project_root = argv.project_root;
   return { ...result, ...labels };
 }
 
@@ -886,16 +914,39 @@ function withRunLabels(result) {
 // rejection/crash.
 
 try {
-  const badArgs = validateArgs(args);
+  // Coerce a possibly-STRINGIFIED args (round 4 — empirically observed on
+  // the controller's dry-run: the harness delivered `args` as a
+  // JSON-encoded string, e.g. `"{\"run_id\": ...}"`, not an object — every
+  // field on the real `args` binding then read as `undefined`, since a
+  // String instance has no `.run_id` property, and validateArgs reported
+  // ALL of run_id/now/plugin_root missing even though they were present
+  // inside the string). This MUST happen before validateArgs, and before
+  // any other statement reads a field off an args-shaped value — see
+  // design note 16.
+  if (typeof args === 'string') {
+    try {
+      argv = JSON.parse(args);
+    } catch (e) {
+      argv = {};
+      return withRunLabels({
+        halt: 'bad-args',
+        detail: `args arrived as a string and failed to JSON.parse: ${e && e.message ? e.message : e}. raw (first 200 chars): ${args.slice(0, 200)}`,
+      });
+    }
+  } else {
+    argv = args;
+  }
+
+  const badArgs = validateArgs(argv);
   if (badArgs) return withRunLabels(badArgs);
 
-  lib = `${args.plugin_root}/lib`;
+  lib = `${argv.plugin_root}/lib`;
 
   const results = [];
   let tasksDone = 0;
 
-  while (tasksDone < args.max_tasks) {
-    const nextCmd = `node "${lib}/plan-io.mjs" next${args.task_id ? ` --task "${args.task_id}"` : ''}`;
+  while (tasksDone < argv.max_tasks) {
+    const nextCmd = `node "${lib}/plan-io.mjs" next${argv.task_id ? ` --task "${argv.task_id}"` : ''}`;
     const adv = await relay(nextCmd, { phase: 'Advance', label: `advance-${tasksDone}` });
     if (!adv.ok) {
       throw new Error(`plan-io.mjs next failed: ${adv.reason || 'unknown'}`);
@@ -911,7 +962,7 @@ try {
 
     results.push({ task_id: outcome.task_id, sha: outcome.sha, tokens_delta: outcome.tokens_delta, concerns: outcome.concerns });
     tasksDone += 1;
-    if (args.task_id) break;
+    if (argv.task_id) break;
   }
 
   // Ordinary completion: the requested cap (--tasks N, or a single
