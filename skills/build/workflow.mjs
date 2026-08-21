@@ -407,6 +407,40 @@
 //     `data` must be a JSON OBJECT (not a string of JSON) and `reason`/
 //     `hint` must be JSON `null` (not the string "null") — coercion is the
 //     enforcement backstop, not a substitute for asking correctly.
+//
+//     ROUND 3 (empirical, live build smoke, run 005, journal evidence):
+//     `{"ok": true, "data": "{\n \"ok\": true, \"reason\": null,
+//     \"hint\": null, \"data\": {\"path\": \".claude/state/review/
+//     task-002.md\"}}"}` — the relay agent stuffed the ENTIRE contract line
+//     into `data` as a string, i.e. one full envelope nested inside
+//     another. Round-2 coercion correctly `JSON.parse`s that string but then
+//     leaves the WHOLE parsed envelope sitting in `out.data` — every call
+//     site reading `out.data.<field>` (e.g. `rp.data.path`) got `undefined`
+//     because the real value was one level deeper, at `out.data.data.path`.
+//     Consequence: the reviewer was dispatched with PACKAGE_PATH=undefined,
+//     the safety classifier (correctly) blocked it, and the task
+//     fail-closed parked — the right guard tripped for the wrong reason.
+//     Fix: `looksLikeEnvelope(v)` recognizes an object that itself has both
+//     an `ok` key and a `data` key — the shape of a full contract reply,
+//     never a legitimate `data` PAYLOAD shape (checked against every
+//     lib/*.{sh,py,mjs} script's actual `data` fields — `violations`,
+//     `sha`, `path`, `applied`/`failed`, etc. — none of which carry an `ok`
+//     key of their own). `coerceRelayFields` now checks
+//     `looksLikeEnvelope(out.data)` AFTER the string-parse step (so it
+//     catches BOTH round 3's reported forms — `data` arriving as a
+//     stringified envelope, and `data` arriving as an already-parsed
+//     envelope OBJECT — with the one check) and, if true, replaces `out`
+//     ENTIRELY with that nested object and re-runs the same normalization
+//     on it (`depth` parameter caps this at exactly one unwrap — a relay
+//     agent nesting two envelopes deep is not chased further; it falls
+//     through as an ordinary malformed-result retry/throw instead of a
+//     silent wrong value, same fail-safe shape as every other drift case
+//     here). Not conditioned on top-level `reason`/`hint` being absent (an
+//     earlier draft of this fix considered that an extra guard) — the
+//     `ok`+`data` co-occurrence in `data`'s own shape is narrow enough on
+//     its own, and adding the extra condition would have silently skipped
+//     the unwrap on any future variant that happens to echo top-level
+//     reason/hint too.
 
 export const meta = {
   name: 'mvp-build',
@@ -506,24 +540,59 @@ const RELAY_RESULT_SCHEMA = {
   additionalProperties: true,
 };
 
-// coerceRelayFields(out) -> out, mutated in place, with round-2 empirical
-// field-shape drift normalized (design note 19b): a haiku relay agent has
-// been observed returning `data` as a STRING of pretty-printed JSON
-// (instead of the JSON object RELAY_RESULT_SCHEMA and the prompt both ask
-// for) and `reason`/`hint` as the LITERAL STRING "null" (instead of JSON
-// `null`) when the underlying command left them absent — schema-valid under
-// the deliberately permissive `{}` sub-schemas (design note 19), but wrong
-// for every call site that reads `val.data.violations`/`fin.data.sha`/etc.
-// assuming a real object. Also defensively coerces a stringified `ok`
-// ("true"/"false") to a real boolean, the same drift class. Throws (never
-// swallows) if `data` is a string that fails to JSON.parse — the caller
-// treats that identically to a missing/malformed `ok`: one retry, then a
-// throw, per the existing retry ladder.
-function coerceRelayFields(out) {
+// looksLikeEnvelope(v) -> true iff v is a plain object that itself has the
+// shape of a full {ok,...,data} contract reply (round-3 evidence below):
+// specifically `ok` present AND a `data` key present. Checked against every
+// lib/*.{sh,py,mjs} script's own `data` payload shapes (`{violations:[...]}`,
+// `{sha:...}`, `{path:...}`, `{applied:[...],failed:[...]}`, etc.) — none of
+// them legitimately carry BOTH an `ok` and a `data` key of their own, so this
+// heuristic never misfires on a real (non-nested) data payload.
+function looksLikeEnvelope(v) {
+  return !!v && typeof v === 'object' && !Array.isArray(v) && typeof v.ok !== 'undefined' && 'data' in v;
+}
+
+// coerceRelayFields(out, depth) -> out (or a replacement object), with
+// empirical field-shape drift normalized (design note 19b):
+//   - round 2: a haiku relay agent has been observed returning `data` as a
+//     STRING of pretty-printed JSON (instead of the JSON object
+//     RELAY_RESULT_SCHEMA and the prompt both ask for) and `reason`/`hint`
+//     as the LITERAL STRING "null" (instead of JSON `null`) when the
+//     underlying command left them absent — schema-valid under the
+//     deliberately permissive `{}` sub-schemas (design note 19), but wrong
+//     for every call site that reads `val.data.violations`/`fin.data.sha`/
+//     etc. assuming a real object. Also defensively coerces a stringified
+//     `ok` ("true"/"false") to a real boolean, the same drift class.
+//   - round 3: the relay agent has ALSO been observed nesting the ENTIRE
+//     {ok,reason,hint,data} envelope one level inside `data` — either as
+//     the stringified JSON handled above, or directly as an object — e.g.
+//     `{"ok":true,"data":"{\n \"ok\":true,\"reason\":null,\"hint\":null,
+//     \"data\":{\"path\":\"...\"}}"}`. Round-2 coercion alone JSON.parses
+//     the string correctly but then leaves the WHOLE envelope sitting in
+//     `out.data`, so `out.data.path` reads as `undefined` (the real value
+//     is one level deeper, at `out.data.data.path`) — a fail-closed park
+//     with the wrong trigger (PACKAGE_PATH=undefined instead of the
+//     structural issue this guard is actually for). Fix: after the
+//     string-parse step, if `out.data` looksLikeEnvelope(), that nested
+//     object IS the real relay result — replace `out` entirely with it and
+//     re-run this same normalization on the replacement (`depth` guards
+//     against recursing past one unwrap; a relay agent nesting the
+//     envelope two levels deep is not a case worth chasing — it will
+//     surface as a normal malformed-result retry/throw instead of a
+//     silent wrong value). Applies uniformly whether `data` arrived as a
+//     string that parsed into an envelope shape or as an object already in
+//     that shape — one check covers both of round 3's reported forms.
+// Throws (never swallows) if `data` is a string that fails to JSON.parse —
+// the caller treats that identically to a missing/malformed `ok`: one
+// retry, then a throw, per the existing retry ladder.
+function coerceRelayFields(out, depth = 0) {
   if (typeof out.ok === 'string') out.ok = out.ok === 'true';
   if (out.reason === 'null') out.reason = null;
   if (out.hint === 'null') out.hint = null;
   if (typeof out.data === 'string') out.data = JSON.parse(out.data);
+
+  if (depth === 0 && looksLikeEnvelope(out.data)) {
+    return coerceRelayFields({ ...out.data }, depth + 1);
+  }
   return out;
 }
 
