@@ -158,6 +158,16 @@ run_finalize "$d_arg2" brief
 assert_eq "(argv) missing msg-file exit code" "1" "$F_EXIT"
 assert_eq "(argv) missing msg-file ok:false" "False" "$(json_field "$F_OUT" 'd["ok"]')"
 
+# --- argv guard: unexpected extra positional arg (not "--files") -> ok:false -
+
+d_arg3="$(new_git_repo)"
+write_msg "$d_arg3/msg.txt" "feat: x"
+
+run_finalize "$d_arg3" brief msg.txt some-stray-arg
+
+assert_eq "(argv) unexpected extra arg exit code" "1" "$F_EXIT"
+assert_eq "(argv) unexpected extra arg ok:false" "False" "$(json_field "$F_OUT" 'd["ok"]')"
+
 # --- build-task without --files -> ok:false, hint mentions --files ----------
 
 d_bt="$(new_git_repo)"

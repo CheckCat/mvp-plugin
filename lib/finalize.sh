@@ -124,9 +124,16 @@ if [[ ${#EXISTING[@]} -eq 0 ]]; then
   fail "nothing to commit" "none of the scope paths exist on disk"
 fi
 
+# mktemp + trap-cleanup for all captured command output below (git add stderr,
+# git commit output) — never a fixed /tmp path, to avoid races/clobbering
+# under concurrent finalize.sh invocations.
+GIT_ADD_ERR="$(mktemp)"
+COMMIT_OUT="$(mktemp)"
+trap 'rm -f "$GIT_ADD_ERR" "$COMMIT_OUT"' EXIT
+
 for p in "${EXISTING[@]}"; do
-  if ! git add -- "$p" 2>/tmp/finalize-git-add-err; then
-    fail "git add failed for: $p ($(head -c 200 /tmp/finalize-git-add-err))"
+  if ! git add -- "$p" 2>"$GIT_ADD_ERR"; then
+    fail "git add failed for: $p ($(head -c 200 "$GIT_ADD_ERR"))"
   fi
 done
 
@@ -136,9 +143,6 @@ if [[ -z "$(git diff --cached --name-only -- "${EXISTING[@]}")" ]]; then
 fi
 
 # --- path-restricted commit: operator's unrelated staged files never leak -
-
-COMMIT_OUT="$(mktemp)"
-trap 'rm -f "$COMMIT_OUT"' EXIT
 
 if ! git commit -F "$MSG_FILE" -- "${EXISTING[@]}" >"$COMMIT_OUT" 2>&1; then
   fail "commit failed: $(head -c 200 "$COMMIT_OUT")"
