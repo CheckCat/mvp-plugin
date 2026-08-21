@@ -7,7 +7,7 @@ description: Use after mvp:clarify to generate project meta-files, agents and st
 
 **Announce at start:** «Using mvp:bootstrap to generate project meta-files, agents and state».
 
-**Iron Law: Уроки прогонов попадают в invariants.md проекта, не в плагин.** v1 позволил специфике одного конкретного проекта прорасти в глобальные `~/.claude/agents/templates/` — следующий проект наследовал чужие допущения молча. В v2 канал для проектных инвариантов — `.claude/state/invariants.md`, файл проекта, коммитится вместе с остальным bootstrap. Шаблоны в `${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/templates/` остаются stack-специфичными, не project-специфичными: если тянет дописать туда что-то про конкретный проект — это невыполненный Stop&Ask, не шаблон.
+**Iron Law: Уроки прогонов попадают в invariants.md проекта, не в плагин.** v1 позволил специфике проекта прорасти в глобальные `~/.claude/agents/templates/` — следующий проект унаследовал чужие допущения молча. Канал для проектных инвариантов — `.claude/state/invariants.md`, коммитится вместе с bootstrap. Шаблоны в `${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/templates/` — stack-специфичные, не project-специфичные: тянет дописать конкретику проекта — это Stop&Ask, не шаблон.
 
 Каждый результат скрипта — последняя строка stdout, JSON `{"ok","reason","hint","data"}`. При `ok:false` — почини по `hint` и повтори, либо Stop&Ask. `state.json` руками не редактируется — только через `state.sh`.
 
@@ -17,7 +17,7 @@ description: Use after mvp:clarify to generate project meta-files, agents and st
 ${CLAUDE_PLUGIN_ROOT}/lib/gate.sh bootstrap
 ```
 
-`ok:false` с `reason` про `pending_critical` — Stop&Ask: «N critical находок mvp:clarify ещё не закрыты — вернись в mvp:clarify (mode ≥ light), либо явно подтверди override через auto-режим clarify». Никакого скрытого обхода — gate.sh не принимает override-флаг, единственный путь снять блокировку — сделать `pending_critical == 0` через сам mvp:clarify.
+`ok:false` с `reason` про `pending_critical` — Stop&Ask: «N critical находок mvp:clarify не закрыты — вернись в mvp:clarify (mode ≥ light), либо подтверди override через auto-режим clarify». gate.sh не принимает override-флаг — снять блокировку можно только через `pending_critical == 0` в mvp:clarify.
 
 Любой другой `ok:false` — Stop&Ask с `reason`/`hint` как есть.
 
@@ -25,7 +25,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/gate.sh bootstrap
 ```
 ${CLAUDE_PLUGIN_ROOT}/lib/state.sh get auto_closed_critical
 ```
-Если `data.value > 0` — покажи оператору: «N critical находок были auto-closed в mvp:clarify без ручного ревью» (не блокер, просто прозрачность — см. `project_brief/clarify_queue.jsonl` для деталей). Продолжай.
+Если `data.value > 0` — покажи оператору: «N critical auto-closed в mvp:clarify без ревью» (не блокер — см. `project_brief/clarify_queue.jsonl`). Продолжай.
 
 ## Шаг 2 — state skeleton
 
@@ -50,8 +50,11 @@ mkdir -p .claude/state/briefs .claude/state/reports .claude/state/review .claude
 
 ## Forbidden edges
 FORBIDDEN_EDGE: <src-pattern> --> <dst-pattern>
+BOUNDARY_EXEMPT: <path>
 ```
 `FORBIDDEN_EDGE:` — по одной строке на явную архитектурную границу из brief'а (например «integration-сервисы stateless, без прямого доступа к БД» → `FORBIDDEN_EDGE: integration-* --> DB`). Паттерны glob-ish: `*` — wildcard, `(A|B)` проходит как regex-alternation. Не выдумывай границы, которых brief не называет — пустая секция (без строк `FORBIDDEN_EDGE:`) валиднее выдуманной.
+
+`BOUNDARY_EXEMPT:` — путь workspace-shared артефакта, который меняют задачи любого boundary (пример: `uv.lock` в uv-workspace); точное совпадение, не glob. `validate-task.sh` не гейтит эти пути по boundary, `finalize.sh` стейджит их с задачей.
 
 **3.2. `ci-mirror.sh`** — детерминированная генерация из `## Stack` brief'а. Читай `backend`/`frontend` ТЕМ ЖЕ способом, что `_extract_stack_value` в `skills/brief/scripts/package-brief.sh` (строки ~166–188: awk по `## Stack`, `- key: value`, case-insensitive key, первое совпадение побеждает) — replicate этот awk один в один для `backend` и для `frontend`, не изобретай новый формат парсинга.
 

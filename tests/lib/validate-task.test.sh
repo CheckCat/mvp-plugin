@@ -205,6 +205,37 @@ run_vt "$d_h" 001 --boundary app --files "app/file with spaces.py"
 assert_eq "(h) exit code" "0" "$VT_EXIT"
 assert_eq "(h) ok:true" "True" "$(json_field "$VT_OUT" 'd["ok"]')"
 
+# --- (i) BOUNDARY_EXEMPT: declared exempt root file changed outside boundary,
+#         undeclared -> no boundary violation, no declared violation ---------
+
+d_i="$(new_git_repo)"
+write_ci_mirror "$d_i" "true"
+printf 'BOUNDARY_EXEMPT: uv.lock\n' >"$d_i/.claude/state/invariants.md"
+echo 'x' >"$d_i/app/foo.py"
+echo 'lock' >"$d_i/uv.lock"
+(cd "$d_i" && git add app/foo.py uv.lock .claude/state/invariants.md)
+
+run_vt "$d_i" 001 --boundary app --files app/foo.py
+
+assert_eq "(i) exit code" "0" "$VT_EXIT"
+assert_eq "(i) ok:true" "True" "$(json_field "$VT_OUT" 'd["ok"]')"
+assert_eq "(i) no violations" "0" "$(violations_count "$VT_OUT")"
+
+# --- (i2) control: same as (i) but NO BOUNDARY_EXEMPT line -> boundary
+#          violation on uv.lock (existing behavior preserved) ----------------
+
+d_i2="$(new_git_repo)"
+write_ci_mirror "$d_i2" "true"
+echo 'x' >"$d_i2/app/foo.py"
+echo 'lock' >"$d_i2/uv.lock"
+(cd "$d_i2" && git add app/foo.py uv.lock)
+
+run_vt "$d_i2" 001 --boundary app --files app/foo.py
+
+assert_eq "(i2) exit code" "1" "$VT_EXIT"
+assert_eq "(i2) ok:false" "False" "$(json_field "$VT_OUT" 'd["ok"]')"
+assert_eq "(i2) boundary detail" "uv.lock" "$(violations_of_check "$VT_OUT" boundary)"
+
 # --- argv guard: missing task-id ---------------------------------------------
 
 d_arg1="$(new_git_repo)"

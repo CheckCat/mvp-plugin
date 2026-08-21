@@ -18,15 +18,26 @@
 #   2. boundary — every file changed in the working tree (union of
 #                `git diff --name-only HEAD`, `git diff --name-only --cached`,
 #                and untracked files via `git ls-files --others
-#                --exclude-standard`) must resolve under --boundary or under
-#                .claude/state. Path containment is computed with Python's
+#                --exclude-standard`) must resolve under --boundary, under
+#                .claude/state, or be a project-declared BOUNDARY_EXEMPT path
+#                (see below). Path containment is computed with Python's
 #                os.path.relpath (not bash string-prefix matching) to avoid
 #                the "app/../secret.py passes a naive `startswith('app/')`
 #                check" class of bug (see task-7 report I-3 fix for the
 #                precedent this follows).
-#   3. declared — same changed-file set, minus anything under .claude/state,
-#                compared against --files. Extra actual files -> undeclared-files;
-#                extra declared files -> missing-declared.
+#   3. declared — same changed-file set, minus anything under .claude/state
+#                or BOUNDARY_EXEMPT, compared against --files. Extra actual
+#                files -> undeclared-files; extra declared files ->
+#                missing-declared.
+#
+# BOUNDARY_EXEMPT (workspace-shared artifacts, e.g. a uv-workspace root
+# uv.lock that a --boundary task legitimately regenerates): lines matching
+# `^BOUNDARY_EXEMPT: <path>` in .claude/state/invariants.md, one exact
+# relative path per line (globs are NOT supported — exact string match only).
+# Missing invariants.md -> no exemptions, current behavior. Exempt paths are
+# treated exactly like .claude/state in both the boundary and declared
+# checks (allowed outside boundary, not required to be declared — they are
+# shared noise, not this task's business).
 #
 # Filenames are carried NUL-delimited (git ... -z | python3, stdin) end to
 # end so spaces/special characters in paths are never word-split or
@@ -113,13 +124,29 @@ else
   fi
 fi
 
+# --- BOUNDARY_EXEMPT: read project-declared exemptions from invariants.md ----
+#
+# One path per line, exact-match, no globs. Missing file -> empty (no
+# exemptions, current behavior). Comma-joined like FILES_CSV — same
+# env-var-scalar pattern as everything else here, never shell-interpolated
+# into the python source text.
+
+EXEMPT_CSV=""
+INVARIANTS=".claude/state/invariants.md"
+if [ -f "$INVARIANTS" ]; then
+  EXEMPT_CSV="$(grep -E '^BOUNDARY_EXEMPT:[[:space:]]*' "$INVARIANTS" \
+    | sed -E 's/^BOUNDARY_EXEMPT:[[:space:]]*//; s/[[:space:]]*$//' \
+    | paste -sd, - 2>/dev/null)"
+fi
+
 # --- steps 2+3: boundary + declared, one python3 call -------------------------
 #
 # Changed files come in over stdin (NUL-delimited, deduped by union of the
-# three git sources); everything else (boundary, declared csv, the ci
-# violation computed above) comes in via env vars — never interpolated into
-# the python source text. This single call also decides ok/exit-code so bash
-# just relays python's exit status (pipeline exit status = last stage).
+# three git sources); everything else (boundary, declared csv, exempt csv,
+# the ci violation computed above) comes in via env vars — never
+# interpolated into the python source text. This single call also decides
+# ok/exit-code so bash just relays python's exit status (pipeline exit
+# status = last stage).
 
 RESULT="$(
   {
@@ -127,7 +154,7 @@ RESULT="$(
     git diff --name-only -z --cached 2>/dev/null
     git ls-files --others --exclude-standard -z 2>/dev/null
   } | CI_VIOLATION="$CI_VIOLATION" CI_DETAIL="$CI_DETAIL" \
-      V_BOUNDARY="$BOUNDARY" V_FILES_CSV="$FILES_CSV" python3 -c '
+      V_BOUNDARY="$BOUNDARY" V_FILES_CSV="$FILES_CSV" V_EXEMPT_CSV="$EXEMPT_CSV" python3 -c '
 import json, os, sys
 
 
@@ -148,6 +175,8 @@ for p in parts:
 boundary = os.environ.get("V_BOUNDARY", "")
 declared_csv = os.environ.get("V_FILES_CSV", "")
 declared = {d.strip() for d in declared_csv.split(",") if d.strip()}
+exempt_csv = os.environ.get("V_EXEMPT_CSV", "")
+exempt = {e.strip() for e in exempt_csv.split(",") if e.strip()}
 
 violations = []
 
@@ -155,10 +184,10 @@ if os.environ.get("CI_VIOLATION") == "1":
     violations.append({"check": "ci", "detail": os.environ.get("CI_DETAIL", "")})
 
 for f in seen:
-    if not (under(f, boundary) or under(f, ".claude/state")):
+    if not (under(f, boundary) or under(f, ".claude/state") or f in exempt):
         violations.append({"check": "boundary", "detail": f})
 
-actual_excl_state = {f for f in seen if not under(f, ".claude/state")}
+actual_excl_state = {f for f in seen if not under(f, ".claude/state") and f not in exempt}
 
 undeclared = sorted(actual_excl_state - declared)
 missing_declared = sorted(declared - actual_excl_state)

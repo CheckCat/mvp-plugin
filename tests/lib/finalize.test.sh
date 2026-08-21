@@ -171,6 +171,33 @@ if (cd "$d_c3" && git ls-files --error-unmatch -- gone.py >/dev/null 2>&1); then
   fail=1
 fi
 
+# --- (d) BOUNDARY_EXEMPT: build-task commit picks up a modified exempt
+#         root file (e.g. uv-workspace root uv.lock) alongside the declared
+#         --files, even though it was never listed in --files -------------
+
+d_d="$(new_git_repo)"
+mkdir -p "$d_d/.claude/state"
+printf 'BOUNDARY_EXEMPT: uv.lock\n' >"$d_d/.claude/state/invariants.md"
+echo 'lock-v1' >"$d_d/uv.lock"
+(cd "$d_d" && git add .claude/state/invariants.md uv.lock && git commit -qm "chore: seed")
+echo 'print(1)' >"$d_d/task.py"
+echo 'lock-v2' >"$d_d/uv.lock"
+write_msg "$d_d/msg.txt" "feat: add task with exempt lockfile"
+
+run_finalize "$d_d" build-task msg.txt --files task.py
+
+assert_eq "(d) exit code" "0" "$F_EXIT"
+assert_eq "(d) ok:true" "True" "$(json_field "$F_OUT" 'd["ok"]')"
+COMMITTED_D="$(cd "$d_d" && git show --name-only --pretty=format: HEAD | sed '/^$/d')"
+if ! printf '%s\n' "$COMMITTED_D" | grep -qxF "task.py"; then
+  echo "FAIL: (d) task.py not in commit: $COMMITTED_D" >&2
+  fail=1
+fi
+if ! printf '%s\n' "$COMMITTED_D" | grep -qxF "uv.lock"; then
+  echo "FAIL: (d) exempt uv.lock not picked up by build-task commit: $COMMITTED_D" >&2
+  fail=1
+fi
+
 # --- argv guard: unknown scope -> ok:false, hint present, exit 1 -------------
 
 d_arg="$(new_git_repo)"
