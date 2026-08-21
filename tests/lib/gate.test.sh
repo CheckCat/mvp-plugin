@@ -182,6 +182,7 @@ fi
 
 d10="$(new_project_dir)"
 (cd "$d10" && "$state" init >/dev/null && "$state" set phase bootstrap-done >/dev/null)
+(cd "$d10" && git init -q)
 run_gate "$d10" plan
 assert_eq "(10) plan bootstrap-done exit code" "0" "$G_EXIT"
 assert_eq "(10) plan bootstrap-done ok:true" "True" "$(json_field "$G_OUT" 'd["ok"]')"
@@ -190,6 +191,7 @@ assert_eq "(10) plan bootstrap-done ok:true" "True" "$(json_field "$G_OUT" 'd["o
 
 d11="$(new_project_dir)"
 (cd "$d11" && "$state" init >/dev/null && "$state" set phase brief-done >/dev/null)
+(cd "$d11" && git init -q)
 run_gate "$d11" plan
 assert_eq "(11) plan wrong phase exit code" "1" "$G_EXIT"
 assert_eq "(11) plan wrong phase ok:false" "False" "$(json_field "$G_OUT" 'd["ok"]')"
@@ -208,6 +210,7 @@ assert_eq "(12) plan finalize-plan recovery" "finalize-plan" "$(json_field "$G_O
 
 d13="$(new_project_dir)"
 (cd "$d13" && "$state" init >/dev/null && "$state" set phase plan-done >/dev/null)
+(cd "$d13" && git init -q)
 run_gate "$d13" build
 assert_eq "(13) build no plan.json exit code" "1" "$G_EXIT"
 assert_eq "(13) build no plan.json ok:false" "False" "$(json_field "$G_OUT" 'd["ok"]')"
@@ -255,5 +258,33 @@ for out in "$(cd "$d1" && "$gate" brief)"; do
   lines="$(printf '%s' "$out" | wc -l | tr -d ' ')"
   assert_eq "(17) output is single line (no trailing newline mid-output)" "0" "$lines"
 done
+
+# --- (18) plan: no .git at all, valid plan.json, phase=bootstrap-done -> ok:false, reason mentions git
+
+d18="$(new_project_dir)"
+(cd "$d18" && "$state" init >/dev/null && "$state" set phase bootstrap-done >/dev/null)
+mkdir -p "$d18/.claude/state"
+echo '{}' >"$d18/.claude/state/plan.json"
+run_gate "$d18" plan
+assert_eq "(18) plan no-git exit code" "1" "$G_EXIT"
+assert_eq "(18) plan no-git ok:false" "False" "$(json_field "$G_OUT" 'd["ok"]')"
+if ! echo "$G_OUT" | grep -qi "git"; then
+  echo "FAIL: (18) plan no-git reason doesn't mention git: $G_OUT" >&2
+  fail=1
+fi
+
+# --- (19) build: no .git at all, valid plan.json, phase=plan-done -> ok:false, reason mentions git
+
+d19="$(new_project_dir)"
+(cd "$d19" && "$state" init >/dev/null && "$state" set phase plan-done >/dev/null)
+mkdir -p "$d19/.claude/state"
+echo '{}' >"$d19/.claude/state/plan.json"
+run_gate "$d19" build
+assert_eq "(19) build no-git exit code" "1" "$G_EXIT"
+assert_eq "(19) build no-git ok:false" "False" "$(json_field "$G_OUT" 'd["ok"]')"
+if ! echo "$G_OUT" | grep -qi "git"; then
+  echo "FAIL: (19) build no-git reason doesn't mention git: $G_OUT" >&2
+  fail=1
+fi
 
 exit $fail

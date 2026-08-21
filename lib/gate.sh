@@ -85,6 +85,10 @@ project_brief_files_exist() {
   [ -f project_brief/technical_solutions.md ] && [ -f project_brief/business_logic.md ]
 }
 
+git_repo_present() {
+  git rev-parse --git-dir >/dev/null 2>&1
+}
+
 # --- brief -------------------------------------------------------------------
 
 is_root_manifest_present() {
@@ -207,6 +211,14 @@ gate_bootstrap() {
 # --- plan -------------------------------------------------------------------
 
 gate_plan() {
+  # invariant: build commits every completed task via finalize.sh, so a
+  # project without a git repo can never reach build — require git from
+  # plan onward, checked before the uncommitted-plan.json probe below.
+  if ! git_repo_present; then
+    emit_result false "no git repository" \
+      "run git init (or rerun mvp:brief git step) — plan/build phases require git" ""
+    exit 1
+  fi
   local planfile=".claude/state/plan.json"
   if [ -f "$planfile" ]; then
     local status
@@ -232,6 +244,13 @@ gate_plan() {
 # --- build -------------------------------------------------------------------
 
 gate_build() {
+  # invariant: build commits every completed task via finalize.sh — require
+  # git before anything else (same rule as gate_plan; see comment there).
+  if ! git_repo_present; then
+    emit_result false "no git repository" \
+      "run git init (or rerun mvp:brief git step) — plan/build phases require git" ""
+    exit 1
+  fi
   local planfile=".claude/state/plan.json"
   local reason=""
   if [ ! -f "$planfile" ]; then
