@@ -231,6 +231,28 @@
 //     one-line `.claude/state/.gitignore` added to make-dryrun.sh, not a
 //     change to review-package.sh itself.
 //
+// 18. park() SKIPS the reset relay entirely when the task's boundary
+//     normalizes to the repo root (empirically discovered on a target
+//     project's first live build smoke: task 001, role devops, service_path
+//     "."). A structural DAG-order conflict (ci-mirror.sh referencing
+//     directories a later task creates) correctly parked the task, but
+//     park()'s reset line
+//     — `git checkout -- "." ...; git restore --staged "." ...; git clean
+//     -fd -e .claude/state -- "."` — is a repo-WIDE destructive reset once
+//     boundary is `.`, and the platform's safety classifier BLOCKED it
+//     (rightly: for a real project this is the whole repo, not a task-scoped
+//     path). The relay then returned no `{line}`, and relayLine() threw,
+//     turning a clean stop-and-ask into an unhandled `halt:'error'` crash —
+//     worse than doing nothing. `git clean -fd`/`checkout`/`restore` are
+//     irreversible; there is no safe repo-root subset to reset short of not
+//     resetting at all. Fix: `isRepoRootBoundary()` normalizes the boundary
+//     (strips trailing slashes; treats '', '.', './' as root) and park()
+//     branches on it — root boundary skips the relay outright (logged, and
+//     folded into the returned `detail` so the operator sees WHY nothing was
+//     reset), non-root boundaries keep the exact prior reset behavior
+//     unchanged. set-status/the stop-and-ask halt still happen either way —
+//     only the destructive git reset is conditional.
+//
 // 16. args may arrive STRINGIFIED (round 4, empirical — controller dry-run
 //     attempt #2 returned `{"halt":"bad-args","detail":"missing required
 //     arg(s): run_id, now, plugin_root"}` even though the SKILL demonstrably
@@ -841,6 +863,18 @@ async function finalize(id, title, boundary, tokensDelta, phaseTitle) {
 
 // --- park ---------------------------------------------------------------------
 
+// isRepoRootBoundary(boundary) -> true iff the boundary string normalizes to
+// the repo root: '', '.', './' (any number of trailing slashes stripped —
+// no `path` import available here, see the file header's no-import
+// constraint, so this is a plain string normalization, not path.normalize).
+// Used by park() (design note 18) to decide whether the reset relay is safe
+// to run at all — a root boundary means "the whole repo", not a task-scoped
+// subtree.
+function isRepoRootBoundary(boundary) {
+  const norm = String(boundary || '').trim().replace(/\/+$/, '');
+  return norm === '' || norm === '.';
+}
+
 // park(id, boundary, why): clean the working tree back to HEAD within the
 // task's boundary — including untracked files the implementer created
 // (`git clean -fd`, fix round item 2/7: without it, an untracked file left
@@ -859,11 +893,31 @@ async function finalize(id, title, boundary, tokensDelta, phaseTitle) {
 // Ruling/Parked ledger line and blockers.md entry are the calling SKILL's
 // job, driven off this halt's `detail` — this workflow never writes prose
 // files itself.
+//
+// Design note 18 (empirical, first live smoke): when `boundary` normalizes
+// to the repo root, the reset line above becomes a repo-WIDE `git
+// checkout/restore/clean` — irreversible destruction of a real project's
+// working tree, and exactly the shape the platform's safety classifier
+// BLOCKS. A blocked relay returns no `{line}`, which used to throw inside
+// relayLine() and turn a clean stop-and-ask into an unhandled `halt:'error'`
+// crash. There is no safe partial reset at the repo root, so the relay is
+// skipped ENTIRELY in that case — the working tree is left as-is for the
+// operator to inspect and clean up by hand — and the skip is recorded both
+// via log() and folded into the returned `why`/`detail` so the operator
+// isn't left guessing why nothing was reset. Non-root boundaries are
+// unaffected: same reset line, same behavior as before this fix.
 async function park(id, boundary, why) {
-  await relayLine(
-    `git checkout -- "${boundary}" 2>/dev/null; git restore --staged "${boundary}" 2>/dev/null; git clean -fd -e .claude/state -- "${boundary}" 2>/dev/null; true`,
-    { phase: 'Finalize', label: `park-clean-${id}` },
-  );
+  const atRoot = isRepoRootBoundary(boundary);
+  if (atRoot) {
+    log(
+      `park: task ${id} boundary (${JSON.stringify(boundary)}) normalizes to the repo root — skipping the reset relay entirely (a repo-wide git checkout/restore/clean is irreversible and gets classifier-blocked); working tree left as-is for operator review`,
+    );
+  } else {
+    await relayLine(
+      `git checkout -- "${boundary}" 2>/dev/null; git restore --staged "${boundary}" 2>/dev/null; git clean -fd -e .claude/state -- "${boundary}" 2>/dev/null; true`,
+      { phase: 'Finalize', label: `park-clean-${id}` },
+    );
+  }
   const statusResult = await relay(`node "${lib}/plan-io.mjs" set-status "${id}" failed`, {
     phase: 'Finalize',
     label: `park-status-${id}`,
@@ -871,7 +925,10 @@ async function park(id, boundary, why) {
   if (!statusResult.ok) {
     log(`park: set-status failed for task ${id}: ${statusResult.reason || 'unknown'}`);
   }
-  return { halt: 'stop-and-ask', task_id: id, detail: why };
+  const detail = atRoot
+    ? `${why} — boundary is repo root — working tree left as-is for operator review (no automatic reset)`
+    : why;
+  return { halt: 'stop-and-ask', task_id: id, detail };
 }
 
 // --- one task ---------------------------------------------------------------------
