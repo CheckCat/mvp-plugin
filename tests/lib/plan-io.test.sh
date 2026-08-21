@@ -147,6 +147,7 @@ assert_eq "next fresh: task_id" "001" "$(json_field "$out" 'd["data"]["task_id"]
 assert_eq "next fresh: boundary" "app" "$(json_field "$out" 'd["data"]["boundary"]')"
 assert_eq "next fresh: role" "backend-implementer" "$(json_field "$out" 'd["data"]["role"]')"
 assert_eq "next fresh: model_class == task complexity_class" "boilerplate" "$(json_field "$out" 'd["data"]["model_class"]')"
+assert_eq "next fresh: files == task declared files" "app/main.py" "$(json_field "$out" '",".join(d["data"]["files"])')"
 brief_path="$(json_field "$out" 'd["data"]["brief_path"]')"
 assert_true "next fresh: brief file exists" "$([ -f "$dir/$brief_path" ] && echo true || echo false)"
 brief_content="$(cat "$dir/$brief_path")"
