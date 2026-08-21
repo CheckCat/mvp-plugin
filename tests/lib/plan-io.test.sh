@@ -337,6 +337,13 @@ run_plan_io "$dir" set-status 002 done >/dev/null
 out="$(run_plan_io "$dir" next)"; rc=$?
 assert_eq "C-1(iii) all done: halt" "all-done" "$(json_field "$out" 'd["data"]["halt"]')"
 
+# (iv) zero tasks in plan -> dag-stuck (never all-done), detail says so
+dir="$(new_repo_with_plan '{"tasks": []}')"
+out="$(run_plan_io "$dir" next)"; rc=$?
+assert_eq "C-1(iv) zero tasks: exit code" "0" "$rc"
+assert_eq "C-1(iv) zero tasks: halt" "dag-stuck" "$(json_field "$out" 'd["data"]["halt"]')"
+assert_eq "C-1(iv) zero tasks: detail" "no tasks in plan" "$(json_field "$out" 'd["data"]["detail"]')"
+
 # ---------------------------------------------------------------------------
 # regression: I-1 — validate rejects a missing/empty plan.tasks structurally
 # (ok:false), instead of silently treating "no tasks" as valid.
