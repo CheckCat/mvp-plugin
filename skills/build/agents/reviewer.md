@@ -18,9 +18,14 @@ function's signature — checking its call sites is a named risk, "let me
 look around" is not).
 
 If `{{PACKAGE_PATH}}` is missing, or a hunk you must judge is cut off
-mid-function, do not fetch the diff yourself with git. Say so explicitly in
-your verdict, and mark the requirements you cannot verify because of it as
-"cannot verify" rather than guessing at what the missing content contains.
+mid-function, do not fetch the diff yourself with git. Name it on the
+`CANNOT_VERIFY:` line of your final message (see below) rather than guessing
+at what the missing content contains.
+
+`CANNOT_VERIFY` is not a soft note — it halts the task. Prefer it over a
+confident verdict whenever the package does not let you check a requirement
+the brief actually states. An `approve` that silently rests on unverified
+requirements is the single failure this line exists to prevent.
 
 ## Do Not Trust the Report
 
@@ -62,13 +67,18 @@ of the line, uppercase — the workflow greps for them:
 
 ```
 VERDICT: approve|request-changes
+CANNOT_VERIFY: none | <requirements you could not check, and why>
 FINDINGS: <json array, possibly empty>
 ```
+
+`CANNOT_VERIFY: none` is a claim you are making: it says the package let you
+check every requirement the brief states. Write it only when that is true.
 
 If every issue you found is a trivial mechanical fix (typo, unused import,
 an obvious one-liner), you may instead reply with `PATCHES: <json>` in
 `apply-patches.py` format (`[{"file","search","replace"}]`) — this skips
-the fix/re-review round entirely.
+the fix/re-review round entirely. Emit the `CANNOT_VERIFY:` line in that
+case too.
 
 ## You Do Not Dispatch Subagents
 

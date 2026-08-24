@@ -56,7 +56,20 @@
 set -u
 
 USAGE="usage: review-package.sh <task-id> --base <sha>"
-UNTRACKED_FILE_LINE_CAP=400
+
+# UNTRACKED_FILE_LINE_CAP — per-file inline cap for NEW (untracked) files.
+#
+# Raised 400 -> 2000 on 2026-08-24, and truncation is no longer silent: any
+# hit is reported in data.truncated so the caller can fail closed. Measured
+# over the vireo run: the untracked section is a MEDIAN 90% of a review
+# package — on greenfield work virtually all of a task's output is new files,
+# so this cap governs almost the entire diff the reviewer judges, not some
+# edge case. 16 of 36 packages were truncated, hiding 8 166 lines; in one
+# task (OAuth account connect) the state validation, one-shot consent
+# consumption and redirect-URI allowlist never reached the reviewer, which
+# returned `approve` regardless. The cap still exists so one generated
+# 100k-line file cannot blow up a package, but a hit is now a reported fact.
+UNTRACKED_FILE_LINE_CAP="${UNTRACKED_FILE_LINE_CAP:-2000}"
 
 # emit_result <ok:true|false> <reason> <hint> <data-json> — see lib/gate.sh.
 emit_result() {
@@ -122,7 +135,8 @@ OUT_PATH="$OUT_DIR/task-${TASK_ID}.md"
 mkdir -p "$OUT_DIR"
 
 TMP_OUT="$(mktemp)"
-trap 'rm -f "$TMP_OUT"' EXIT
+TRUNC_FILE="$(mktemp)"
+trap 'rm -f "$TMP_OUT" "$TRUNC_FILE"' EXIT
 
 {
   echo "# Review: task ${TASK_ID}"
@@ -157,8 +171,8 @@ trap 'rm -f "$TMP_OUT"' EXIT
 #     inlined — a human reviews a diff, not a regenerated lockfile.
 # Everything else keeps the original behavior: content inlined, capped at
 # UNTRACKED_FILE_LINE_CAP lines per file with a truncation note.
-git ls-files --others --exclude-standard -z | UT_CAP="$UNTRACKED_FILE_LINE_CAP" python3 -c '
-import fnmatch, os, sys
+git ls-files --others --exclude-standard -z | UT_CAP="$UNTRACKED_FILE_LINE_CAP" RP_TRUNC_FILE="$TRUNC_FILE" python3 -c '
+import fnmatch, json, os, sys
 
 cap = int(os.environ["UT_CAP"])
 data = sys.stdin.buffer.read()
@@ -183,6 +197,7 @@ def is_lock_or_generated(p):
     return any(fnmatch.fnmatch(base, g) for g in LOCK_GLOBS)
 
 out = []
+truncated = []
 if not paths:
     out.append("(none)")
 for p in paths:
@@ -208,14 +223,43 @@ for p in paths:
     out.extend(lines[:cap])
     if len(lines) > cap:
         out.append(f"... truncated, {len(lines) - cap} more line(s) not shown ...")
+        truncated.append({"path": p, "hidden_lines": len(lines) - cap, "total_lines": len(lines)})
     out.append("```")
     out.append("")
 print("\n".join(out))
+
+# Machine-readable truncation record for the caller. Written to a side file
+# rather than stdout because stdout here IS the package body. An empty list
+# is written explicitly so a missing file always means "the inliner never
+# ran", never "nothing was truncated".
+with open(os.environ["RP_TRUNC_FILE"], "w", encoding="utf-8") as fh:
+    json.dump(truncated, fh)
 ' >>"$TMP_OUT"
 
 mv "$TMP_OUT" "$OUT_PATH"
-trap - EXIT
+# TMP_OUT is gone (moved); TRUNC_FILE is still needed one line below, so the
+# trap is narrowed rather than cleared.
+trap 'rm -f "$TRUNC_FILE"' EXIT
 
-DATA="$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1]}))' "$OUT_PATH")"
+# data.truncated: [] when the reviewer will see every new file in full. A
+# non-empty list means the package is NOT a complete view of the change —
+# workflow.mjs treats that as blocking (fail closed) instead of letting a
+# verdict be issued on partial evidence. See the cap comment above.
+# Fail CLOSED: an unreadable/absent truncation record means the inliner did
+# not finish, so "nothing was truncated" is not a conclusion we may draw. An
+# early version of this block defaulted to [] on error and a crash inside the
+# inliner (a missing import) silently reported a truncated package as
+# complete — exactly the failure this whole change exists to remove.
+if ! DATA="$(RP_OUT_PATH="$OUT_PATH" RP_TRUNC_FILE="$TRUNC_FILE" python3 -c '
+import json, os, sys
+with open(os.environ["RP_TRUNC_FILE"], encoding="utf-8") as fh:
+    truncated = json.load(fh)
+if not isinstance(truncated, list):
+    sys.exit("truncation record is not a list")
+print(json.dumps({"path": os.environ["RP_OUT_PATH"], "truncated": truncated}))
+' 2>&1)"; then
+  fail "cannot read truncation record: $DATA" \
+    "the untracked-file inliner did not complete; the package may be incomplete"
+fi
 emit_result true "" "" "$DATA"
 exit 0

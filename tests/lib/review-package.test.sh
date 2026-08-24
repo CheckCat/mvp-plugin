@@ -241,4 +241,37 @@ run_rp "$d_arg2" 001
 assert_eq "(argv) missing --base exit code" "1" "$RP_EXIT"
 assert_eq "(argv) missing --base ok:false" "False" "$(json_field "$RP_OUT" 'd["ok"]')"
 
+# --- data.truncated: reported, never silent -----------------------------------
+#
+# The reviewer must never get a partial view of a change without the caller
+# being able to tell. Measured on the vireo run: 16 of 36 packages were
+# truncated and every one was reviewed (and approved) regardless, because
+# truncation was only a sentence of prose inside the package body.
+
+d_tr="$(new_git_repo)"
+echo 'seed' >"$d_tr/seed.txt"
+(cd "$d_tr" && git add seed.txt && git commit -q -m "chore: seed")
+BASE_TR="$(cd "$d_tr" && git rev-parse HEAD)"
+
+# under the cap -> truncated == []
+python3 -c "
+import sys
+open(sys.argv[1], 'w').write('\n'.join('line %d' % i for i in range(10)))
+" "$d_tr/small.py"
+run_rp "$d_tr" 900 --base "$BASE_TR"
+assert_eq "(trunc) short file exit 0" "0" "$RP_EXIT"
+assert_eq "(trunc) short file reports empty list" "0" "$(json_field "$RP_OUT" 'len(d["data"]["truncated"])')"
+
+# over the cap -> reported with path and hidden-line count
+python3 -c "
+import sys
+open(sys.argv[1], 'w').write('\n'.join('line %d' % i for i in range(120)))
+" "$d_tr/big.py"
+UNTRACKED_FILE_LINE_CAP=50 run_rp "$d_tr" 901 --base "$BASE_TR"
+assert_eq "(trunc) long file still exits 0" "0" "$RP_EXIT"
+assert_eq "(trunc) long file is reported" "big.py" \
+  "$(json_field "$RP_OUT" '[t["path"] for t in d["data"]["truncated"]][0]')"
+assert_eq "(trunc) hidden line count" "70" \
+  "$(json_field "$RP_OUT" '[t["hidden_lines"] for t in d["data"]["truncated"] if t["path"]=="big.py"][0]')"
+
 exit $fail

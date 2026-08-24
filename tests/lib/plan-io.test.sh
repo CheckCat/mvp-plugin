@@ -410,4 +410,74 @@ assert_eq "M-1 interrupt before missing plan.json: exit code" "0" "$rc"
 assert_eq "M-1 interrupt before missing plan.json: ok" "True" "$(json_field "$out" 'd["ok"]')"
 assert_eq "M-1 interrupt before missing plan.json: halt" "interrupt" "$(json_field "$out" 'd["data"]["halt"]')"
 
+# ---------------------------------------------------------------------------
+# (N) relay diet + script-owned concerns: head_sha on `next`, --write-msg /
+#     --dispatches on `complete`, `ledger --sha HEAD` and --concern. Each of
+#     these removed either a whole subagent dispatch (~30 200 tokens of boot
+#     apiece) or a state write the calling SKILL was told to make and never did.
+# ---------------------------------------------------------------------------
+
+dir="$(new_repo)"
+out="$(run_plan_io "$dir" next)"
+expected_head="$( cd "$dir" && git rev-parse HEAD )"
+assert_eq "N-1 next returns head_sha" "$expected_head" "$(json_field "$out" 'd["data"]["head_sha"]')"
+
+# complete --write-msg builds a finalize.sh-compatible subject from plan.json,
+# so the free-text task title never passes through a shell or a prompt.
+dir="$(new_repo)"
+mutate_plan "$dir" 'plan["tasks"][0]["title"] = "Title with \"quotes\" and $VAR and `backtick`"'
+out="$(run_plan_io "$dir" complete 001 --tokens 5 --dispatches 9 --write-msg .claude/state/msg.txt)"
+assert_eq "N-2 complete ok" "True" "$(json_field "$out" 'd["ok"]')"
+subject="$(head -n1 "$dir/.claude/state/msg.txt")"
+assert_eq "N-3 subject keeps the title verbatim" \
+  'feat: task 001: Title with "quotes" and $VAR and `backtick`' "$subject"
+assert_eq "N-4 msg file is exactly one line" "1" "$(wc -l < "$dir/.claude/state/msg.txt" | tr -d ' ')"
+if ! printf '%s' "$subject" | grep -qE '^(feat|fix|ci|chore|test|docs|refactor)(\(.+\))?: '; then
+  echo "FAIL: N-5 subject fails finalize.sh prefix check: $subject" >&2
+  fail=1
+fi
+
+# telemetry is additive: delta_tokens survives, the honesty fields join it
+ev="$(tail -n1 "$dir/.claude/state/telemetry/events.jsonl")"
+assert_eq "N-6 telemetry keeps delta_tokens" "5" "$(json_field "$ev" 'd["delta_tokens"]')"
+assert_eq "N-7 telemetry records dispatches" "9" "$(json_field "$ev" 'd["dispatches"]')"
+assert_eq "N-8 telemetry marks the figure controller-only" "True" "$(json_field "$ev" 'd["controller_only"]')"
+
+# a newline in the title must not push the real subject into the commit body
+dir="$(new_repo)"
+mutate_plan "$dir" 'plan["tasks"][0]["title"] = "first\nsecond"'
+run_plan_io "$dir" complete 001 --tokens 1 --write-msg .claude/state/msg.txt >/dev/null
+assert_eq "N-9 newline in title collapses to one line" "1" \
+  "$(wc -l < "$dir/.claude/state/msg.txt" | tr -d ' ')"
+
+# ledger --sha HEAD resolves the commit itself, so the call can be chained
+# after finalize.sh in one shell command instead of costing its own relay.
+dir="$(new_repo)"
+head_sha="$( cd "$dir" && git rev-parse HEAD )"
+out="$(run_plan_io "$dir" ledger --task 001 --sha HEAD)"
+assert_eq "N-10 ledger --sha HEAD ok" "True" "$(json_field "$out" 'd["ok"]')"
+assert_eq "N-11 ledger echoes the resolved sha" "$head_sha" "$(json_field "$out" 'd["data"]["sha"]')"
+assert_eq "N-12 ledger line carries the real sha" "1" \
+  "$(grep -c "Task 001: complete ($head_sha)" "$dir/.claude/state/ledger.md")"
+
+# concerns are written BY THE SCRIPT — this is the write the SKILL was told to
+# make and skipped on 36 of 36 vireo tasks.
+dir="$(new_repo)"
+run_plan_io "$dir" ledger --task 002 --sha HEAD \
+  --concern "declared-files hint mismatch: a.py, b.py
+review finding refuted, not fixed: no caller reaches that path" >/dev/null
+assert_eq "N-13 first concern line persisted" "1" \
+  "$(grep -c 'concern (task 002): declared-files hint mismatch: a.py, b.py' "$dir/.claude/state/ledger.md")"
+assert_eq "N-14 second concern line persisted" "1" \
+  "$(grep -c 'concern (task 002): review finding refuted' "$dir/.claude/state/ledger.md")"
+# a concern must never look like it belongs to the following task
+assert_eq "N-15 concerns precede their Task line" "1" \
+  "$(python3 -c "
+import sys
+lines = open(sys.argv[1]).read().splitlines()
+ci = max(i for i, l in enumerate(lines) if l.startswith('  concern (task 002)'))
+ti = max(i for i, l in enumerate(lines) if l.startswith('Task 002: complete'))
+print(1 if ci < ti else 0)
+" "$dir/.claude/state/ledger.md")"
+
 exit $fail

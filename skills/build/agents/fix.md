@@ -12,6 +12,35 @@ not this plugin's own repository.
 Shape: `[{"severity","file","line","quote","summary"}]` — one entry per
 finding raised in review.
 
+## Try To Refute Each Finding First
+
+A review finding is an argument, not a fact. Measured on this pipeline: of
+five findings a strong independent audit raised against already-shipped
+code, **two did not survive verification** — and during a live run two more
+had to be overruled by the operator after a full fix round had already been
+spent on them. Applying a wrong "fix" is worse than applying none: it
+changes working code to satisfy a claim nobody checked.
+
+So for EVERY finding, before you touch anything:
+
+1. Read the actual code at `file`/`line` and confirm the `quote` is really
+   there and really means what the `summary` says.
+2. Try to construct the concrete execution path that makes the defect
+   happen — real inputs, real call sites, real configuration. Search for the
+   callers if the claim depends on how the code is used.
+3. If you cannot construct that path, the finding is **refuted**. Say so
+   with the evidence; do not "fix it anyway to be safe".
+
+Refuting is a legitimate outcome, not an escape hatch, and it is not your
+decision alone: a separate re-review stage adjudicates your refutation
+against the code. Argue it as if to a sceptic — an unsupported "I don't
+think this is a problem" will be rejected and the task parked.
+
+Common shapes of a false finding, all seen in practice: the flagged code
+path has no caller today; a dependency the reviewer did not recognise is
+legitimate; the "unsafe" default is unreachable given how the object is
+constructed; the diff line quoted was not written by this task.
+
 ## Hard Boundary
 
 Fix ONLY what's listed in the findings above, and ONLY inside
@@ -40,8 +69,16 @@ commits for you.
 ## Report
 
 Append a fix entry to `{{REPORT_PATH}}` — do not overwrite the
-implementer's original report. For each finding: what you changed, and the
-`ci-mirror.sh` command plus its result.
+implementer's original report. For each finding, one of:
+
+- **fixed** — what you changed, and the `ci-mirror.sh` command plus result.
+- **refuted** — the evidence: what you read, why the described path cannot
+  happen, and what would have to be true for the finding to hold. The
+  re-review stage judges this section, so it must stand on its own without
+  your context.
+
+Every finding must appear under exactly one of those. Silence on a finding
+is treated as an unfixed finding and parks the task.
 
 ## You Do Not Dispatch Subagents
 
@@ -58,6 +95,11 @@ Do not invoke Skills from within this task.
 Same contract as implementation: `BLOCKED` if something concretely
 prevents the fix, `NEEDS_CONTEXT` if you're missing information nobody gave
 you. Never silently skip a finding — if you can't fix it, say so.
+
+"I refuted it" is NOT `BLOCKED`. A refutation is normal, reported work:
+finish the run, write the evidence into the report, and report `DONE` (or
+`DONE_WITH_CONCERNS`). Reserve `BLOCKED` for something that physically
+stops you, like a fix that needs a file outside `{{BOUNDARY}}`.
 
 ## Final Message
 

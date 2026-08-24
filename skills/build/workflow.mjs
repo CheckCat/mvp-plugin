@@ -465,6 +465,19 @@ const TOTAL_ATTEMPTS_CAP = 2; // 1 initial implementer dispatch + at most 1 retr
 
 // --- module-scoped state set at the top of the entry point, before anything else --
 
+// dispatchCount: every subagent dispatch this run has made, incremented at
+// each of the four call sites that actually invoke agent() (relayLine, relay,
+// agentText, the patch-writer). Telemetry records the per-task delta.
+//
+// Why it exists: `budget.spent()` — the number stored as delta_tokens — only
+// sees the CONTROLLER's usage, and measured against the workflow runtime's own
+// per-agent records it understates the true cost by ~8.4x. Dispatch count is
+// not a token figure, but unlike delta_tokens it scales with the real spend
+// (each dispatch carries a ~30 200-token boot floor), so it is an honest
+// proxy. It is added ALONGSIDE delta_tokens, never replacing it: events.jsonl
+// is append-only and a project's history may span plugin versions.
+let dispatchCount = 0;
+
 let lib = ''; // argv.plugin_root + '/lib', set once argv is known-valid
 // argv: the COERCED args object (design note 16, round 4) — see the entry
 // point below. Every reference in this file that needs a workflow argument
@@ -516,6 +529,7 @@ async function relayLine(cmd, opts = {}) {
     label: opts.label || cmd,
     phase: opts.phase,
   };
+  dispatchCount += 1;
   const out = await agent(prompt, callOpts);
   if (!out || typeof out.line !== 'string') {
     throw new Error(`relayLine: agent did not return a {line:string} object for cmd=${fullCmd}`);
@@ -619,6 +633,7 @@ async function relay(cmd, opts = {}) {
   };
 
   const attempt = async () => {
+    dispatchCount += 1;
     const out = await agent(prompt, callOpts);
     if (!out || (typeof out.ok !== 'boolean' && typeof out.ok !== 'string')) return null;
     try {
@@ -656,6 +671,7 @@ async function relay(cmd, opts = {}) {
 // stringified to the literal text "null", so callers can null-guard it
 // (design note / fix round item 8).
 async function agentText(prompt, opts) {
+  dispatchCount += 1;
   const res = await agent(prompt, opts);
   if (res == null) return null;
   if (typeof res === 'string') return res;
@@ -835,6 +851,24 @@ function parseReviewerVerdict(text) {
   return { kind: 'verdict', verdict: word ? word[1].toLowerCase() : 'request-changes', findings: findingsArr };
 }
 
+// parseCannotVerify(text) -> null when the reviewer could check everything,
+// else the reviewer's own description of what it could not check.
+//
+// reviewer.md requires a literal `CANNOT_VERIFY:` line: `none` when the
+// package supported a full judgement, otherwise the requirements left
+// unverified. A MISSING line is deliberately treated as "none": this parser
+// ships alongside prompt changes, and a reviewer that answered in the old
+// format must not park every task in the plan. The gate that catches an
+// incomplete package regardless of what the reviewer says is truncatedPaths()
+// above — that one is script-side and cannot be talked out of.
+function parseCannotVerify(text) {
+  const raw = extractField(text, 'CANNOT_VERIFY');
+  if (!raw) return null;
+  const v = raw.trim();
+  if (!v || /^(none|no|n\/a)\b/i.test(v)) return null;
+  return v.slice(0, 400);
+}
+
 // re-review.md replies FINDINGS:<json array with a "verdict" field per item>
 function parseReReview(text) {
   const findings = extractJsonField(text, 'FINDINGS');
@@ -853,6 +887,7 @@ function parseReReview(text) {
 // failed apply — fix round item 6).
 async function applyPatchesFlow(id, patches, phaseTitle) {
   const patchesPath = `.claude/state/patches-${id}.json`;
+  dispatchCount += 1;
   await agent(
     `${cwdPrefixLine()}Write EXACTLY this JSON to ${patchesPath} using the Write tool (create the file, overwrite any existing content, no extra text, no markdown code fences):\n${JSON.stringify(patches)}`,
     { model: 'haiku', effort: 'low', phase: phaseTitle, label: `patch-writer-${id}` },
@@ -985,16 +1020,53 @@ async function runValidateLadder(ctx) {
 
 // Returns {parked:false} on success (approve, or a trivial-patches shortcut),
 // or {parked:true, why}. One fix -> re-review cycle, capped, never repeated.
+// truncatedPaths(rp) -> [] or the paths whose content the package could not
+// show in full. review-package.sh caps how many lines of a NEW file it
+// inlines; on greenfield work new files are a median 90% of the package, so
+// a cap hit means the reviewer is judging a partial change. Measured over the
+// vireo run: 16 of 36 packages were truncated and all 16 were reviewed and
+// approved anyway, because truncation was only prose inside the package.
+// This is now a blocking fact — fail closed rather than accept a verdict
+// issued on evidence the reviewer never saw.
+function truncatedPaths(rp) {
+  const t = rp && rp.data && rp.data.truncated;
+  if (!Array.isArray(t)) return [];
+  return t.map((x) => (x && x.path ? `${x.path} (+${x.hidden_lines} lines hidden)` : String(x)));
+}
+
 async function runReviewLadder(ctx) {
   const packageCmd = () => `bash "${lib}/review-package.sh" "${ctx.id}" --base "${ctx.baseSha}"`;
 
   let rp = await relay(packageCmd(), { phase: 'Review', label: `review-package-${ctx.id}-1` });
   if (!rp.ok) throw new Error(`review-package.sh failed for task ${ctx.id}: ${rp.reason || 'unknown'}`);
+  const cut = truncatedPaths(rp);
+  if (cut.length) {
+    return {
+      parked: true,
+      why: `review package is incomplete — ${cut.length} file(s) exceeded the inline cap and were truncated: ${cut.join('; ')}. `
+        + 'Reviewing a partial diff is not a review: split the task, or add the file to the lockfile/generated list in review-package.sh, '
+        + 'or raise UNTRACKED_FILE_LINE_CAP if the file genuinely needs reviewing whole.',
+    };
+  }
 
   const reviewText = await agentText(
     reviewerPrompt({ taskId: ctx.id, briefPath: ctx.briefPath, packagePath: rp.data.path }),
     { model: 'sonnet', phase: 'Review', label: `reviewer-${ctx.id}` },
   );
+  // CANNOT_VERIFY: reviewer.md already told reviewers to flag requirements
+  // they could not check against the diff, and they did — but nothing acted
+  // on it, so an `approve` issued over the top of "I could not verify the
+  // OAuth state validation" was indistinguishable from a clean one. The
+  // reviewer now declares it on its own line and it is a halt, not prose.
+  const cannotVerify = parseCannotVerify(reviewText);
+  if (cannotVerify) {
+    return {
+      parked: true,
+      why: `reviewer could not verify part of this task against the package: ${cannotVerify}. `
+        + 'A verdict issued over unverifiable requirements is not a gate — give the reviewer what it needs, or split the task.',
+    };
+  }
+
   const verdict = parseReviewerVerdict(reviewText);
 
   if (verdict.kind === 'patches') {
@@ -1038,6 +1110,13 @@ async function runReviewLadder(ctx) {
 
   rp = await relay(packageCmd(), { phase: 'Review', label: `review-package-${ctx.id}-2` });
   if (!rp.ok) throw new Error(`review-package.sh (post-fix) failed for task ${ctx.id}: ${rp.reason || 'unknown'}`);
+  const cutAfterFix = truncatedPaths(rp);
+  if (cutAfterFix.length) {
+    return {
+      parked: true,
+      why: `post-fix review package is incomplete — truncated file(s): ${cutAfterFix.join('; ')}`,
+    };
+  }
 
   const reReviewText = await agentText(
     reReviewPrompt({ taskId: ctx.id, packagePath: rp.data.path, findings: verdict.findings }),
@@ -1047,23 +1126,65 @@ async function runReviewLadder(ctx) {
     return { parked: true, why: 're-review dispatch failed: agent returned no result' };
   }
   const verdicted = parseReReview(reReviewText);
-  const stillOpen = verdicted.filter((f) => String(f && f.verdict).toUpperCase() !== 'ADDRESSED');
+
+  // ADDRESSED or REFUTED both close a finding. REFUTED exists because review
+  // findings are not automatically true: of five findings a strong audit
+  // raised against already-shipped vireo code, two did not survive
+  // verification, and during the live run two more had to be overruled by the
+  // operator. Before this, fix.md's only options were "change the code" or
+  // "park" — so a wrong finding cost a full fix -> re-review round and an
+  // operator interrupt. Now fix.md may refute, and THIS re-review pass is what
+  // adjudicates that refutation: the fix agent cannot close its own finding,
+  // it can only argue, and a separate reviewer rules. Anything else — a bare
+  // "won't fix", an unparseable verdict — still parks.
+  const CLOSED = new Set(['ADDRESSED', 'REFUTED']);
+  const stillOpen = verdicted.filter((f) => !CLOSED.has(String(f && f.verdict).toUpperCase()));
   if (stillOpen.length > 0) {
     // RE_REVIEW_CYCLES_CAP=1: this is the only re-review pass — no looping.
-    return { parked: true, why: `re-review: ${stillOpen.length} finding(s) NOT ADDRESSED: ${JSON.stringify(stillOpen)}` };
+    return { parked: true, why: `re-review: ${stillOpen.length} finding(s) not closed: ${JSON.stringify(stillOpen)}` };
+  }
+
+  // A refuted finding is not silently forgotten: it goes to the ledger as a
+  // concern so the operator can see what the pipeline decided not to fix.
+  const refuted = verdicted.filter((f) => String(f && f.verdict).toUpperCase() === 'REFUTED');
+  for (const f of refuted) {
+    ctx.concerns.push(`review finding refuted, not fixed: ${JSON.stringify(f).slice(0, 300)}`);
   }
   return { parked: false };
 }
 
 // --- finalize ---------------------------------------------------------------------
 
-async function finalize(id, title, boundary, tokensDelta, phaseTitle) {
-  const subject = title ? `feat: task ${id}: ${title}` : `feat: task ${id}`;
+// shQuote(s) -> POSIX single-quoted literal, safe for ANY content (the only
+// character needing care inside single quotes is the single quote itself:
+// close, escape, reopen). Used for free-text values that must cross into a
+// relay's shell command — concern lines carry file paths, semicolons and
+// user-authored prose, and none of it may be re-parsed by the shell.
+function shQuote(s) {
+  return `'${String(s).replace(/'/g, `'\\''`)}'`;
+}
+
+// finalize: ONE relay for what used to be three dispatches plus an agent
+// (relay diet, 2026-08-24 — each dispatch costs a flat ~30 200 tokens of
+// subagent boot no matter how trivial the command):
+//   - the commit subject is written by `plan-io.mjs complete --write-msg`
+//     instead of a haiku agent calling Write. That also removes a real
+//     hazard: the task title is free text and used to be interpolated into
+//     a prompt, whereas plan-io reads it straight from plan.json.
+//   - `plan-io.mjs ledger` is chained after finalize.sh in the same shell
+//     command and resolves the new commit's sha itself (`--sha HEAD`), so
+//     the run no longer pays a dispatch to pass one string along.
+//   - concerns are persisted by that same call (`--concern`), by the script.
+//     They used to be the calling SKILL's job and were dropped on all 36
+//     vireo tasks; a state write that depends on the LLM remembering is not
+//     a state write. Sorting concerns through shQuote keeps arbitrary text
+//     out of the shell's hands.
+// The chain's LAST json line is now the ledger envelope, so the commit sha
+// is read from there (plan-io echoes it back for exactly this reason).
+async function finalize(id, boundary, tokensDelta, dispatches, concerns, phaseTitle) {
   const msgPath = `.claude/state/commit-msg-${id}.txt`;
-  await agent(
-    `${cwdPrefixLine()}Write EXACTLY this text to ${msgPath} using the Write tool (create the file, overwrite any existing content, no extra text, no markdown code fences):\n${subject}\n`,
-    { model: 'haiku', effort: 'low', phase: phaseTitle, label: `msg-writer-${id}` },
-  );
+  const concernText = (concerns || []).filter(Boolean).join('\n');
+  const concernArg = concernText ? ` --concern ${shQuote(concernText)}` : '';
 
   // Staging scope is the task's BOUNDARY, not its declared file list (design
   // note 17b): the declared list is a hint, so anything the task legitimately
@@ -1071,21 +1192,18 @@ async function finalize(id, title, boundary, tokensDelta, phaseTitle) {
   // fixture) must still be committed. One quoted path — explicit, never
   // `git add -A`; finalize.sh's build-task scope appends `.claude/state`
   // itself, which is where the report/brief/state files live.
-  const fin = await relay(
-    `node "${lib}/plan-io.mjs" complete "${id}" --tokens ${tokensDelta} && bash "${lib}/finalize.sh" build-task "${msgPath}" --files "${boundary}"`,
-    { phase: phaseTitle, label: `finalize-${id}`, retryable: false },
-  );
+  const cmd = [
+    `node "${lib}/plan-io.mjs" complete "${id}" --tokens ${tokensDelta} --dispatches ${dispatches} --write-msg "${msgPath}"`,
+    `bash "${lib}/finalize.sh" build-task "${msgPath}" --files "${boundary}"`,
+    `node "${lib}/plan-io.mjs" ledger --task "${id}" --sha HEAD${concernArg}`,
+  ].join(' && ');
+
+  const fin = await relay(cmd, { phase: phaseTitle, label: `finalize-${id}`, retryable: false });
   if (!fin.ok) {
     throw new Error(`finalize failed for task ${id}: ${fin.reason || 'unknown'}`);
   }
-
-  const ledgerResult = await relay(`node "${lib}/plan-io.mjs" ledger --task "${id}" --sha "${fin.data.sha}"`, {
-    phase: phaseTitle,
-    label: `ledger-${id}`,
-    retryable: false,
-  });
-  if (!ledgerResult.ok) {
-    throw new Error(`ledger failed for task ${id}: ${ledgerResult.reason || 'unknown'}`);
+  if (!fin.data || !fin.data.sha) {
+    throw new Error(`finalize for task ${id} returned no sha: ${JSON.stringify(fin.data)}`);
   }
   return fin.data.sha;
 }
@@ -1168,19 +1286,27 @@ async function runOneTask(adv) {
   const boundary = adv.data.boundary;
   const role = adv.data.role;
   const modelClass = adv.data.model_class;
-  const title = adv.data.title; // added to plan-io.mjs's `next` payload in the fix round
   const declaredFiles = Array.isArray(adv.data.files) ? adv.data.files : [];
   const filesCsv = declaredFiles.join(',');
   const reportPath = `.claude/state/reports/task-${id}.md`;
 
   // Token-delta measurement starts here, at the very top of the task
-  // iteration — BEFORE baseSha capture and the implementer dispatch (fix
-  // round item 4: it previously started only after the implementer had
-  // already run, silently excluding that call's cost from its own task's
-  // delta).
+  // iteration — BEFORE the implementer dispatch (fix round item 4: it
+  // previously started only after the implementer had already run, silently
+  // excluding that call's cost from its own task's delta).
   const spentBefore = safeBudgetSpent();
+  const dispatchesBefore = dispatchCount;
 
-  const baseSha = await relayLine('git rev-parse HEAD', { phase: 'Advance', label: `basesha-${id}` });
+  // baseSha now rides along in `next`'s payload instead of costing its own
+  // relay dispatch (relay diet, 2026-08-24 — `git rev-parse HEAD` was being
+  // paid for at the same ~30 200-token boot price as a full ci-mirror run).
+  // plan-io returns null only on a repo with no HEAD, which cannot happen
+  // here: gate.sh requires a git repo from the plan stage onward and every
+  // earlier task committed.
+  const baseSha = adv.data.head_sha;
+  if (!baseSha) {
+    return park(id, boundary, 'plan-io next returned no head_sha — cannot establish a review base for this task');
+  }
 
   const initialModel = modelClass === 'novel-design' ? 'opus' : 'sonnet';
   const implPrompt = implementerPrompt({ briefPath, boundary, taskId: id, reportPath });
@@ -1211,10 +1337,16 @@ async function runOneTask(adv) {
 
   const spentAfter = safeBudgetSpent();
   const tokensDelta = Math.max(0, spentAfter - spentBefore);
+  // +1: this task's own finalize relay, which has not been dispatched yet at
+  // the moment the count is taken.
+  const dispatches = dispatchCount - dispatchesBefore + 1;
 
-  const sha = await finalize(id, title, boundary, tokensDelta, 'Finalize');
+  const sha = await finalize(id, boundary, tokensDelta, dispatches, ctx.concerns, 'Finalize');
 
-  return { done: true, task_id: id, sha, tokens_delta: tokensDelta, concerns: ctx.concerns };
+  // concerns still travel in the return value for the SKILL's run summary,
+  // but they are no longer the SKILL's responsibility to persist — finalize()
+  // hands them to plan-io, which writes them into ledger.md.
+  return { done: true, task_id: id, sha, tokens_delta: tokensDelta, dispatches, concerns: ctx.concerns };
 }
 
 // --- args validation (design note: fail fast, before any agent() call) -------
