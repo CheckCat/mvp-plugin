@@ -724,6 +724,39 @@ function implementerRetryPrompt(basePrompt, violations) {
   return `${basePrompt}\n\nThis is a RETRY after validation failed. The previous attempt left these violations (JSON array of {"check","detail"}):\n${JSON.stringify(violations)}\nFix them within the same hard boundary before finishing.`;
 }
 
+// reviewerRetryPrompt: one re-ask when the reviewer said request-changes but
+// its FINDINGS payload did not parse as JSON.
+//
+// Live failure this exists for (task 037): the reviewer emitted a long
+// findings array with a malformed entry (`"summary":"…", "}`), the array
+// failed to parse, and the task was parked — discarding ~371k tokens of
+// already-completed implementer work because the REVIEWER, not the code, had
+// a bad turn. Parking is right when the code is unfit; it is a terrible
+// answer to a transcription slip in the gate itself. A re-ask costs one
+// reviewer dispatch against a full task re-run, so it is worth trying exactly
+// once. Still fails closed: a second unparseable reply parks as before.
+function reviewerRetryPrompt(basePrompt, rawReply) {
+  return [
+    basePrompt,
+    '',
+    'RETRY — your previous reply could not be used. You answered `VERDICT: request-changes`,',
+    'but the `FINDINGS:` payload was not valid JSON and could not be parsed, so no fix could',
+    'be dispatched from it. Do not re-do the review: you already read the package and reached',
+    'a verdict. Re-state that same judgement, correctly encoded.',
+    '',
+    'Requirements for this reply:',
+    '- `FINDINGS:` must be followed by ONE line of strict JSON — a single array, double quotes,',
+    '  no trailing commas, no comments, no markdown fence, nothing after the closing bracket.',
+    '- Keep every `summary` to one short sentence and every `quote` to the single offending line.',
+    '  The previous reply was very long; length is what broke it.',
+    '- If, restating it, you conclude the change is in fact acceptable, `VERDICT: approve` with',
+    '  `FINDINGS: []` is a legitimate answer. Do not invent findings to justify the earlier verdict.',
+    '',
+    'Your previous (unparseable) reply, for reference:',
+    String(rawReply || '').slice(0, 1500),
+  ].join('\n');
+}
+
 function validatorPrompt({ taskId, boundary, violations }) {
   return cwdPrefixLine() + [
     `Read ${argv.plugin_root}/skills/build/agents/validator.md and follow it exactly with these substitutions:`,
@@ -1084,14 +1117,44 @@ async function runReviewLadder(ctx) {
     return { parked: false };
   }
 
-  // request-changes with no findings is unparseable/malformed — fail closed
-  // rather than dispatching fix.md with an empty findings array (nothing for
-  // it to act on; "empty findings, please fix" is not a real fix task).
+  // request-changes with no usable findings: the reply is malformed, not a
+  // judgement we can act on — fix.md has nothing to work from. Re-ask the
+  // reviewer ONCE for a correctly encoded restatement before giving up
+  // (see reviewerRetryPrompt for why: a bad turn in the gate should not cost
+  // a whole task's implementation). A second failure parks, as before.
   if (!verdict.findings || verdict.findings.length === 0) {
-    return {
-      parked: true,
-      why: `reviewer VERDICT: request-changes but FINDINGS was empty or unparseable — raw reply: ${(reviewText || '').slice(0, 400)}`,
-    };
+    const retryText = await agentText(
+      reviewerRetryPrompt(
+        reviewerPrompt({ taskId: ctx.id, briefPath: ctx.briefPath, packagePath: rp.data.path }),
+        reviewText,
+      ),
+      { model: 'sonnet', phase: 'Review', label: `reviewer-retry-${ctx.id}` },
+    );
+    const retryVerdict = parseReviewerVerdict(retryText);
+
+    // The restated reply is judged on its own terms — including the escape
+    // hatches the first one had. A reviewer allowed to restate may legitimately
+    // land on approve, or decide the findings were all trivial-mechanical.
+    if (retryVerdict.kind === 'patches') {
+      const applyRetry = await applyPatchesFlow(ctx.id, retryVerdict.patches, 'Review');
+      if (!applyRetry.ok) {
+        return { parked: true, why: `review PATCHES apply failed (after retry): ${JSON.stringify(applyRetry.data)}` };
+      }
+      return { parked: false };
+    }
+    if (retryVerdict.verdict === 'approve') {
+      ctx.concerns.push('reviewer first reply was unparseable; restated verdict was approve');
+      return { parked: false };
+    }
+    if (!retryVerdict.findings || retryVerdict.findings.length === 0) {
+      return {
+        parked: true,
+        why: 'reviewer VERDICT: request-changes but FINDINGS was empty or unparseable twice (original + one retry) — '
+          + `raw reply: ${(retryText || '').slice(0, 400)}`,
+      };
+    }
+    verdict.findings = retryVerdict.findings;
+    ctx.concerns.push('reviewer first reply was unparseable; findings taken from the restated reply');
   }
 
   // request-changes with real findings: exactly one fix -> re-review cycle.
