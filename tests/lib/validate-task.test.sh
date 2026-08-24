@@ -146,7 +146,12 @@ run_vt "$d_d2" 001 --boundary app --files ""
 assert_eq "(d2) exit code" "0" "$VT_EXIT"
 assert_eq "(d2) ok:true" "True" "$(json_field "$VT_OUT" 'd["ok"]')"
 
-# --- (e) undeclared file: actual changed file not in --files -----------------
+# --- (e) file created but not declared: NOT a violation ----------------------
+#
+# `files` is the planner's guess made before the code exists, not a contract —
+# the contract is --boundary. The old two-directional check reported this on
+# 35 of 36 vireo tasks; a check that fires almost always carries no
+# information. In-boundary files the plan never named are now simply fine.
 
 d_e="$(new_git_repo)"
 write_ci_mirror "$d_e" "true"
@@ -156,13 +161,9 @@ echo 'y' >"$d_e/app/bar.py"
 
 run_vt "$d_e" 001 --boundary app --files app/foo.py
 
-assert_eq "(e) exit code" "1" "$VT_EXIT"
-assert_eq "(e) ok:false" "False" "$(json_field "$VT_OUT" 'd["ok"]')"
-DECL_E="$(violations_of_check "$VT_OUT" declared)"
-if ! printf '%s' "$DECL_E" | grep -q "undeclared-files:.*app/bar.py"; then
-  echo "FAIL: (e) expected undeclared-files violation mentioning app/bar.py: $VT_OUT" >&2
-  fail=1
-fi
+assert_eq "(e) exit code" "0" "$VT_EXIT"
+assert_eq "(e) ok:true" "True" "$(json_field "$VT_OUT" 'd["ok"]')"
+assert_eq "(e) no violations at all" "0" "$(json_field "$VT_OUT" 'len(d["data"]["violations"])')"
 
 # --- (f) missing-declared: --files lists a file that wasn't actually changed -
 

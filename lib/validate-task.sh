@@ -26,9 +26,25 @@
 #                check" class of bug (see task-7 report I-3 fix for the
 #                precedent this follows).
 #   3. declared — same changed-file set, minus anything under .claude/state
-#                or BOUNDARY_EXEMPT, compared against --files. Extra actual
-#                files -> undeclared-files; extra declared files ->
-#                missing-declared.
+#                or BOUNDARY_EXEMPT, compared against --files. ONE direction
+#                only: a declared file the task never produced ->
+#                missing-declared. Files the task created without the plan
+#                naming them are NOT reported.
+#
+#                Why one-directional (2026-08-24): `files` is the planner's
+#                guess, made before the code exists — a hint for
+#                observability, never a contract (that is what --boundary
+#                is). Measured over the vireo run, the old two-directional
+#                form fired `undeclared-files` on 35 of 36 tasks — a check
+#                with a 97% base rate carries no information, it just trains
+#                everyone to wave the result through. Dropping that half
+#                leaves the direction that still means something: the plan
+#                promised an artifact and it isn't there. That fires on 20
+#                of 36, and every firing is real plan-vs-reality drift.
+#
+#                Still non-blocking: workflow.mjs treats a violation set made
+#                up only of `declared` entries as a concern (which now
+#                reaches ledger.md), never a park.
 #
 # BOUNDARY_EXEMPT (workspace-shared artifacts, e.g. a uv-workspace root
 # uv.lock that a --boundary task legitimately regenerates): lines matching
@@ -189,11 +205,11 @@ for f in seen:
 
 actual_excl_state = {f for f in seen if not under(f, ".claude/state") and f not in exempt}
 
-undeclared = sorted(actual_excl_state - declared)
+# One direction only (see the header): a file the plan promised and the task
+# did not produce. The reverse — files created but not listed — is normal and
+# was reported on 35 of 36 vireo tasks, which is noise, not signal.
 missing_declared = sorted(declared - actual_excl_state)
 
-if undeclared:
-    violations.append({"check": "declared", "detail": "undeclared-files: " + ", ".join(undeclared)})
 if missing_declared:
     violations.append({"check": "declared", "detail": "missing-declared: " + ", ".join(missing_declared)})
 
