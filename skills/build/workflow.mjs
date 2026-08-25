@@ -81,14 +81,19 @@
 //    values passed cover exactly each template's documented Placeholders
 //    block (verified against skills/build/agents/*.md, Task 13).
 //
-// 4. Concerns/blockers are NOT written to ledger.md/blockers.md by this
-//    workflow. Iron Law: "scripts move data" — plan-io.mjs has no
-//    "append Ruling"/"append blockers" verb, and this script has no FS
-//    access to write them directly even if it wanted to. DONE_WITH_CONCERNS
-//    text and park() reasons are carried in the workflow's RETURN VALUE
-//    (`concerns: [...]` on success, `detail` on a halt) for the calling
-//    SKILL (main session, which DOES have scripts/FS access) to persist
-//    through a script. This workflow stays a pure orchestrator.
+// 4. Concerns ARE persisted, by a script, since 2026-08-25 — this note said
+//    the opposite for the whole v2.0 line and the opposite was the bug.
+//    Originally: plan-io.mjs had no "append" verb and this script has no FS
+//    access, so concerns rode home in the RETURN VALUE and the calling SKILL
+//    was instructed to write them into ledger.md. Measured over the vireo
+//    run: concerns arose on 35 of 36 tasks, reached the payload on 30, and
+//    ledger.md received ZERO — a state write left to an LLM was skipped 36
+//    times out of 36, which is precisely what the Iron Law exists to
+//    prevent. `plan-io.mjs ledger --concern` now writes them inside
+//    finalize()'s single relay command. They still travel in the return
+//    value as well, for the SKILL's run summary — but nothing depends on
+//    the SKILL remembering. blockers.md remains the dispatched agent's own
+//    file, written by the agent under the _common.md contract.
 //
 // 5. Cross-file touch: lib/plan-io.mjs's `next` response gained `files` (the
 //    task's declared files) and `title` (fix round, design note 11) keys,
@@ -798,8 +803,20 @@ function reReviewPrompt({ taskId, packagePath, findings }) {
 
 // Missing STATUS -> BLOCKED (park), per the brief: never silently treat an
 // unparseable agent reply as success.
+// parseStatus: the agent's own STATUS line.
+//
+// DONE_WITH_CONCERNS MUST precede DONE in the alternation. Regex alternation
+// is ordered and unanchored at the right, so `(DONE|DONE_WITH_CONCERNS)`
+// matches the `DONE` prefix of `DONE_WITH_CONCERNS` and the long form is
+// unreachable. That was the bug until 2026-08-25: across the vireo run, 21
+// replies on 20 tasks reported DONE_WITH_CONCERNS and every one of them was
+// read as a plain DONE — so `concerns.push(extractConcernLines(...))` never
+// fired and every concern an implementer or fix agent raised in its own
+// words was silently dropped. Only noteDeclaredOnly's concerns ever reached
+// the ledger. The trailing \b makes the long form win on its own merits
+// rather than by ordering luck alone.
 function parseStatus(text) {
-  const m = /^STATUS:\s*(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)/m.exec(text || '');
+  const m = /^STATUS:\s*(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT)\b/m.exec(text || '');
   return m ? m[1] : 'BLOCKED';
 }
 
@@ -807,10 +824,25 @@ function parseStatus(text) {
 // trimmed, or null if the label never appears at the start of a line. For
 // single-token contract fields (STATUS, VERDICT) which are guaranteed
 // single-line by every template's contract.
+// extractField(text, label) -> the label's value, or null.
+//
+// `\s` matches newlines, which is deliberate — an agent that puts the value
+// on the line BELOW the label is still understood. The cost is that an EMPTY
+// field would otherwise swallow whatever follows it: `CANNOT_VERIFY:\nFINDINGS: []`
+// returned the string "FINDINGS: []" as the value, which parseCannotVerify
+// then read as "the reviewer could not verify something" and parked a
+// perfectly good task — the same ~371k-token loss shape as task 037, but on
+// a reply that was fine. So a capture that is itself a contract token
+// (`^[A-Z][A-Z_-]*:`) means the field was blank, not that it held the next
+// line. Labels are hardcoded constants, never agent-supplied, so
+// interpolating one into the pattern is safe.
 function extractField(text, label) {
   const re = new RegExp(`^${label}:\\s*(.*)$`, 'm');
   const m = re.exec(text || '');
-  return m ? m[1].trim() : null;
+  if (!m) return null;
+  const v = m[1].trim();
+  if (/^[A-Z][A-Z_-]*:/.test(v)) return null;
+  return v;
 }
 
 // extractJsonField(text, label) -> {found, value}. `found` is true iff
@@ -898,7 +930,12 @@ function parseCannotVerify(text) {
   const raw = extractField(text, 'CANNOT_VERIFY');
   if (!raw) return null;
   const v = raw.trim();
-  if (!v || /^(none|no|n\/a)\b/i.test(v)) return null;
+  // WHOLE-value match, never a prefix. A prefix test (`/^(none|no)\b/`) reads
+  // "none of the OAuth checks are visible in this package" — a reviewer
+  // reporting that it verified nothing — as "nothing to report", opening a
+  // gate whose entire purpose is to fail closed. Caught by
+  // tests/lib/workflow-parsers.mjs before it could reach a run.
+  if (!v || /^(none|no|n\/a)[.!]?$/i.test(v)) return null;
   return v.slice(0, 400);
 }
 

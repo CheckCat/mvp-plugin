@@ -7,7 +7,7 @@ description: Use after a finished mvp:build run to harvest telemetry into templa
 
 **Announce at start:** «Using mvp:retro to harvest this run into template/skill improvements».
 
-**Iron Law: Уроки прогона → invariants.md проекта или observation-файл плагина; глобальные промпты не трогаем на живую.** Ты никогда не редактируешь `skills/*/SKILL.md`/`skills/bootstrap/templates/*` отсюда — только пишешь кандидаты в observation-файл. Применение — отдельный коммит/PR в репозитории плагина, вручную или отдельной сессией там.
+**Iron Law: Уроки прогона → invariants.md проекта или observation-файл плагина; глобальные промпты не трогаем на живую.** Отсюда ты никогда не редактируешь `skills/*/SKILL.md`/`templates/*` — только пишешь кандидаты в observation-файл (см. Шаг 5).
 
 ## Шаг 1 — гейт
 
@@ -19,11 +19,17 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh get phase
 
 ## Шаг 2 — телеметрия
 
-Прочитай `.claude/state/telemetry/events.jsonl` (JSON Lines). Единственный существующий тип — `task_complete`: `{"event","task","delta_tokens","ts"}`. Не выдумывай другие поля/типы. Собери `delta_tokens` по каждой `task`, сумму, min/max/avg. Конверсию в $ не считай (нет цены API) — отдай числа как есть, это сырьё для калибровки.
+Прочитай `.claude/state/telemetry/events.jsonl`. Тип один — `task_complete`: `{"event","task","delta_tokens","controller_only","dispatches","ts"}` (два средних поля с 2026-08-25, в старых записях `null`). Собери по `task`: сумму, min/max/avg.
+
+**`delta_tokens` — не стоимость**, а `budget.spent()` глазами контроллера: субагентов не видит, на vireo занизил в **8.4×**. `dispatches` — честный прокси (floor ~30 200 токенов на диспатч). В $ не переводи.
 
 ## Шаг 3 — вербатим-наблюдения
 
-Прочитай `.claude/state/ledger.md` (`Ruling:`/`Parked:`), `decisions.log`, `blockers.md` (если есть). На каждый кандидат в rationalization-таблицу/правку шаблона — **вербатим-цитата**, не перефраз (тот же evidence-принцип, что в mvp:clarify), плюс источник-файл и цель (`skills/<name>/SKILL.md#Rationalization` или `skills/bootstrap/templates/<file>`).
+Прочитай `ledger.md`, `decisions.log`, `blockers.md`. В ledger: `  concern (task <id>): …` (пишет `ledger --concern`, основной источник), `Ruling:`, `Parked:`.
+
+**`blockers.md` — приоритетный вход**: дефекты вне границы агента, которых не ловит ни один гейт (на vireo — циклический импорт, ронявший два деплой-юнита при зелёном CI). Каждый незакрытый — кандидат в правку плагина или в задачу следующего плана.
+
+На каждый кандидат — **вербатим-цитата** (не перефраз), источник-файл и цель (`skills/<name>/SKILL.md#Rationalization` либо `templates/<file>`).
 
 ## Шаг 4 — observation-файл
 
@@ -33,10 +39,10 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh get phase
 # Observations: <project> — <date>
 
 ## Run summary
-tasks done/failed (plan-io.mjs summary), суммарные delta_tokens
+done/failed (plan-io.mjs summary), сумма delta_tokens и dispatches
 
 ## Token calibration data
-| task | delta_tokens |  (Шаг 2, без пересчёта в $)
+| task | delta_tokens | dispatches |
 
 ## Rationalization-table candidates (verbatim)
 | cite | source file | target skill/table |
@@ -45,18 +51,16 @@ tasks done/failed (plan-io.mjs summary), суммарные delta_tokens
 | cite | source file | target template |
 ```
 
-`${CLAUDE_PLUGIN_ROOT}` не dev-checkout плагина (read-only install) → всё равно пиши файл, предупреди оператора: перенеси в репозиторий плагина руками.
-
 ## Шаг 5 — что дальше руками
 
-Ничего из Шага 3/4 не применяется автоматически. Правки `skills/*/SKILL.md`/`templates/*` — отдельный коммит/PR в репозитории плагина (не в этом проекте): оператором или новой сессией, работающей прямо там.
+Ничего из Шага 3/4 не применяется автоматически: правки `skills/*`/`templates/*` — отдельный коммит в репо плагина. Если `${CLAUDE_PLUGIN_ROOT}` read-only, файл всё равно пиши и скажи оператору перенести.
 
 ## Rationalization table
 
 | Соблазн | Почему нет |
 |---|---|
 | «Подправлю шаблон плагина сейчас, чего ждать PR» | Iron Law — живые правки глобальных шаблонов ломают доверие для всех проектов, не только этого |
-| «Придумаю коэффициент $/token сам» | нет данных о цене API — только `delta_tokens`, конверсию считает оператор отдельно |
+| «`delta_tokens` = стоимость прогона» | тень стоимости: занижает в 8.4×, субагентов не видит |
 
 ## HARD-GATE
 
