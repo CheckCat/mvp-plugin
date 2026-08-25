@@ -567,4 +567,153 @@ mutate_plan "$dir" 'for t in plan["tasks"]:
 out="$(run_plan_io "$dir" next)"
 assert_eq "O-15 next picks the newly added task" "004" "$(json_field "$out" 'd["data"]["task_id"]')"
 
+# ---------------------------------------------------------------------------
+# (P) reopen — a FINISHED plan must be continuable without erasing history.
+#     Before this verb, phase=="done" was terminal: gate_build refuses anything
+#     but plan-done, and re-running mvp:plan re-dispatches a planner that writes
+#     plan.json WHOLE, destroying every completed task and its real commit sha.
+#     The only alternative was `state.sh set phase plan-done` typed by hand.
+# ---------------------------------------------------------------------------
+
+# seed_state <dir> <phase> — writes the state.json that gate.sh/plan-io read.
+seed_state() {
+  printf '{"phase":"%s","pending_critical":0}\n' "$2" > "$1/.claude/state/state.json"
+}
+
+# finished_repo -> a repo whose tasks are all done and whose phase is "done"
+finished_repo() {
+  local dir
+  dir="$(new_repo)"
+  mutate_plan "$dir" 'for t in plan["tasks"]:
+    t["status"] = "done"'
+  seed_state "$dir" done
+  echo "$dir"
+}
+
+dir="$(finished_repo)"
+out="$(run_plan_io "$dir" reopen --reason "translate UI to Russian")"
+assert_eq "P-1 reopen ok on a finished plan" "True" "$(json_field "$out" 'd["ok"]')"
+assert_eq "P-2 epoch bumped to 2" "2" "$(json_field "$out" 'd["data"]["epoch"]')"
+assert_eq "P-3 phase moved to plan-done" "plan-done" \
+  "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['phase'])" "$dir/.claude/state/state.json")"
+assert_eq "P-4 reason recorded in reopened[]" "translate UI to Russian" \
+  "$(python3 -c "
+import json,sys
+p=json.load(open(sys.argv[1])); print(p['reopened'][-1]['reason'])
+" "$dir/.claude/state/plan.json")"
+assert_eq "P-5 base_sha captured" "40" \
+  "$(python3 -c "
+import json,sys
+p=json.load(open(sys.argv[1])); print(len(p['reopened'][-1]['base_sha'] or ''))
+" "$dir/.claude/state/plan.json")"
+# history is untouched: every pre-existing task keeps status done
+assert_eq "P-6 completed tasks are not reset" "3" \
+  "$(python3 -c "
+import json,sys
+p=json.load(open(sys.argv[1]))
+print(sum(1 for t in p['tasks'] if t['status']=='done'))
+" "$dir/.claude/state/plan.json")"
+
+# --invariant lands in the file build inlines into every task brief
+dir="$(finished_repo)"
+out="$(run_plan_io "$dir" reopen --reason "ru locale" --invariant "User-facing text is Russian; identifiers stay English")"
+assert_eq "P-7 invariant echoed back" "User-facing text is Russian; identifiers stay English" \
+  "$(json_field "$out" 'd["data"]["invariant"]')"
+assert_contains "P-8 invariant appended to invariants.md" \
+  "$(cat "$dir/.claude/state/invariants.md")" "User-facing text is Russian"
+assert_contains "P-9 invariant tagged with its epoch" \
+  "$(cat "$dir/.claude/state/invariants.md")" "(epoch 2)"
+
+# --reason is mandatory: a reopen with no recorded why is the hand-typed
+# phase flip this verb replaces
+dir="$(finished_repo)"
+out="$(run_plan_io "$dir" reopen)"; rc=$?
+assert_eq "P-10 reopen without --reason exits 1" "1" "$rc"
+assert_eq "P-11 reopen without --reason ok:false" "False" "$(json_field "$out" 'd["ok"]')"
+
+# a live run is not a finished one
+dir="$(new_repo)"
+seed_state "$dir" plan-done
+out="$(run_plan_io "$dir" reopen --reason "nope")"
+assert_eq "P-12 reopen refuses a live plan" "False" "$(json_field "$out" 'd["ok"]')"
+assert_contains "P-13 refusal names the phase" "$(json_field "$out" 'd["reason"]')" "phase != done"
+
+# reopening twice must not invent a second continuation
+dir="$(finished_repo)"
+run_plan_io "$dir" reopen --reason "first" >/dev/null
+out="$(run_plan_io "$dir" reopen --reason "second")"
+assert_eq "P-14 second reopen refused" "False" "$(json_field "$out" 'd["ok"]')"
+assert_contains "P-15 refusal says the plan is already open" \
+  "$(json_field "$out" 'd["reason"]')" "already open"
+assert_eq "P-16 epoch was NOT bumped twice" "2" \
+  "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['epoch'])" "$dir/.claude/state/plan.json")"
+
+# end-to-end: reopen -> add-task -> next hands back the new work
+dir="$(finished_repo)"
+run_plan_io "$dir" reopen --reason "continue" >/dev/null
+run_plan_io "$dir" add-task --json "$VALID_TASK" >/dev/null
+out="$(run_plan_io "$dir" next)"
+assert_eq "P-17 next dispatches the continuation task" "004" "$(json_field "$out" 'd["data"]["task_id"]')"
+
+# ---------------------------------------------------------------------------
+# (Q) add-task --json-file — a continuation is several related tasks, and
+#     N separate calls cost N relay dispatches plus N windows in which the plan
+#     is half-extended (a crash leaves depends_on pointing at absent siblings).
+# ---------------------------------------------------------------------------
+
+TASK_A='{"title":"Introduce i18n layer","level":11,"service":"frontend","service_path":"services/frontend","role":"frontend-implementer","files":["services/frontend/src/i18n.ts"],"depends_on":[],"estimate_tokens":9000,"complexity_class":"novel-design"}'
+TASK_B='{"title":"Translate API messages","level":11,"service":"api","service_path":"services/api","role":"backend-implementer","files":["services/api/app/errors.py"],"depends_on":[],"estimate_tokens":7000,"complexity_class":"follow-pattern"}'
+
+dir="$(new_repo)"
+printf '[%s,%s]' "$TASK_A" "$TASK_B" > "$dir/batch.json"
+out="$(run_plan_io "$dir" add-task --json-file "$dir/batch.json")"
+assert_eq "Q-1 batch add ok" "True" "$(json_field "$out" 'd["ok"]')"
+assert_eq "Q-2 ids assigned in sequence" "004,005" "$(json_field "$out" 'd["data"]["task_ids"]' | tr -d "[]' " )"
+assert_eq "Q-3 plan grew by two" "5" "$(json_field "$out" 'd["data"]["total"]')"
+
+# one transaction: a bad entry anywhere means NOTHING is written
+dir="$(new_repo)"
+printf '[%s,{"title":"broken"}]' "$TASK_A" > "$dir/batch.json"
+out="$(run_plan_io "$dir" add-task --json-file "$dir/batch.json")"
+assert_eq "Q-4 invalid batch refused" "False" "$(json_field "$out" 'd["ok"]')"
+assert_eq "Q-5 plan.json untouched by a failed batch" "3" \
+  "$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1]))['tasks']))" "$dir/.claude/state/plan.json")"
+
+# duplicate ids WITHIN one batch are caught, not silently collapsed
+dir="$(new_repo)"
+printf '[{"id":"004",%s},{"id":"004",%s}]' \
+  "$(printf '%s' "$TASK_A" | sed 's/^{//')" "$(printf '%s' "$TASK_B" | sed 's/^{//')" > "$dir/batch.json"
+out="$(run_plan_io "$dir" add-task --json-file "$dir/batch.json")"
+assert_eq "Q-6 duplicate id inside the batch refused" "False" "$(json_field "$out" 'd["ok"]')"
+
+# the two input forms stay distinct
+dir="$(new_repo)"
+out="$(run_plan_io "$dir" add-task --json "[$TASK_A]")"
+assert_eq "Q-7 --json refuses an array" "False" "$(json_field "$out" 'd["ok"]')"
+dir="$(new_repo)"
+printf '[]' > "$dir/batch.json"
+out="$(run_plan_io "$dir" add-task --json-file "$dir/batch.json")"
+assert_eq "Q-8 empty batch refused" "False" "$(json_field "$out" 'd["ok"]')"
+dir="$(new_repo)"
+out="$(run_plan_io "$dir" add-task --json "$VALID_TASK" --json-file "$dir/batch.json")"
+assert_eq "Q-9 --json and --json-file are exclusive" "False" "$(json_field "$out" 'd["ok"]')"
+
+# tasks added after a reopen carry that epoch, and summary reports per-epoch
+# progress so a 4-task continuation is not drowned by 55 finished tasks
+dir="$(finished_repo)"
+run_plan_io "$dir" reopen --reason "continue" >/dev/null
+printf '[%s,%s]' "$TASK_A" "$TASK_B" > "$dir/batch.json"
+run_plan_io "$dir" add-task --json-file "$dir/batch.json" >/dev/null
+out="$(run_plan_io "$dir" summary)"
+assert_eq "Q-10 epoch 1 holds the original run" "3" "$(json_field "$out" 'd["data"]["epochs"]["1"]["total"]')"
+assert_eq "Q-11 epoch 2 holds the continuation" "2" "$(json_field "$out" 'd["data"]["epochs"]["2"]["total"]')"
+assert_eq "Q-12 epoch 2 work is pending" "2" "$(json_field "$out" 'd["data"]["epochs"]["2"]["pending"]')"
+assert_eq "Q-13 summary reports the current epoch" "2" "$(json_field "$out" 'd["data"]["epoch"]')"
+
+# a plan that never reopened still reports epoch 1 (backward compatibility)
+dir="$(new_repo)"
+out="$(run_plan_io "$dir" summary)"
+assert_eq "Q-14 legacy plan reads as epoch 1" "3" "$(json_field "$out" 'd["data"]["epochs"]["1"]["total"]')"
+assert_eq "Q-15 legacy plan reopened count is 0" "0" "$(json_field "$out" 'd["data"]["reopened"]')"
+
 exit $fail
