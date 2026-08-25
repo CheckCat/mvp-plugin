@@ -227,7 +227,7 @@
 //     scratch paths are typically gitignored; the dry-run fixture
 //     (tests/fixtures/dryrun/make-dryrun.sh) does NOT add a .gitignore, so
 //     once a real run starts writing `.claude/state/briefs/`, `reports/`,
-//     `review/`, `patches/`, `commit-msgs/`, etc., those will show
+//     `review/`, `patches/`, `commit-messages/`, etc., those will show
 //     up as "untracked" noise in later tasks' review packages alongside the
 //     actual new file(s) a task creates. Deliberately left the fixture as-is
 //     rather than adding a `.gitignore`: the fixture's job is to exercise
@@ -1288,7 +1288,7 @@ async function finalize(id, boundary, tokensDelta, dispatches, concerns, phaseTi
   // plan-io's writeTextAtomic mkdir -p's the parent, so no setup step is
   // needed, and finalize.sh stages `.claude/state` wholesale — the nested path
   // is committed exactly as the flat one was.
-  const msgPath = `.claude/state/commit-msgs/commit-msg-${id}.txt`;
+  const msgPath = `.claude/state/commit-messages/commit-msg-${id}.txt`;
   const concernText = (concerns || []).filter(Boolean).join('\n');
   const concernArg = concernText ? ` --concern ${shQuote(concernText)}` : '';
 

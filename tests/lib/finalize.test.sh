@@ -249,7 +249,7 @@ fi
 d_ext="$(new_git_repo)"
 mkdir -p "$d_ext/.claude/state"
 echo '{}' >"$d_ext/.claude/state/state.json"
-echo '# plan' >"$d_ext/PROJECT_PLAN.md"
+echo '# plan' >"$d_ext/docs/plan.md"
 echo 'extra' >"$d_ext/extra.txt"
 write_msg "$d_ext/msg.txt" "chore: plan with extension"
 
@@ -266,16 +266,16 @@ fi
 # --- every default scope preset stages+commits correctly (no --files) -------
 
 d_brief="$(new_git_repo)"
-mkdir -p "$d_brief/project_brief" "$d_brief/project_brief.raw"
-echo 'x' >"$d_brief/project_brief/technical_solutions.md"
-echo 'x' >"$d_brief/project_brief.raw/orig.md"
+mkdir -p "$d_brief/docs/product" "$d_brief/docs/product/_raw"
+echo 'x' >"$d_brief/docs/product/technical-solutions.md"
+echo 'x' >"$d_brief/docs/product/_raw/orig.md"
 write_msg "$d_brief/msg.txt" "chore: brief scope"
 run_finalize "$d_brief" brief msg.txt
 assert_eq "(preset brief) exit code" "0" "$F_EXIT"
 
 d_clarify="$(new_git_repo)"
-mkdir -p "$d_clarify/project_brief" "$d_clarify/.claude/state"
-echo 'x' >"$d_clarify/project_brief/business_logic.md"
+mkdir -p "$d_clarify/docs/product" "$d_clarify/.claude/state"
+echo 'x' >"$d_clarify/docs/product/business-logic.md"
 echo '{}' >"$d_clarify/.claude/state/state.json"
 write_msg "$d_clarify/msg.txt" "chore: clarify scope"
 run_finalize "$d_clarify" clarify msg.txt
@@ -284,7 +284,7 @@ assert_eq "(preset clarify) exit code" "0" "$F_EXIT"
 d_bootstrap="$(new_git_repo)"
 mkdir -p "$d_bootstrap/.claude/agents" "$d_bootstrap/.claude/state"
 echo '# CLAUDE' >"$d_bootstrap/CLAUDE.md"
-echo '# ARCH' >"$d_bootstrap/ARCHITECTURE.md"
+echo '# ARCH' >"$d_bootstrap/docs/architecture.md"
 echo 'x' >"$d_bootstrap/.claude/agents/role.md"
 echo '{}' >"$d_bootstrap/.claude/state/state.json"
 write_msg "$d_bootstrap/msg.txt" "chore: bootstrap scope"
@@ -294,7 +294,7 @@ assert_eq "(preset bootstrap) exit code" "0" "$F_EXIT"
 d_plan="$(new_git_repo)"
 mkdir -p "$d_plan/.claude/state"
 echo '{}' >"$d_plan/.claude/state/plan.json"
-echo '# plan' >"$d_plan/PROJECT_PLAN.md"
+echo '# plan' >"$d_plan/docs/plan.md"
 write_msg "$d_plan/msg.txt" "chore: plan scope"
 run_finalize "$d_plan" plan msg.txt
 assert_eq "(preset plan) exit code" "0" "$F_EXIT"

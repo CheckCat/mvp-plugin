@@ -20,8 +20,8 @@
 #                              (e.g. "## Команды (CI = local)") still counts
 #                              as the "Команды" section — the generated
 #                              CLAUDE.md is allowed to annotate headers.
-#   4. architecture-md-missing — ARCHITECTURE.md does not exist.
-#   5. architecture-forbidden-edge — an edge in ARCHITECTURE.md's mermaid
+#   4. architecture-md-missing — docs/architecture.md does not exist.
+#   5. architecture-forbidden-edge — an edge in docs/architecture.md's mermaid
 #                              diagram matches a FORBIDDEN_EDGE rule read
 #                              from --invariants (default:
 #                              .claude/state/invariants.md). Missing
@@ -60,7 +60,7 @@
 #                              violation on build task 1.
 #
 # --- Required CLAUDE.md sections (documented mapping, see task-11 report) --
-# ## Стек     — matches project_brief/technical_solutions.md's "## Stack"
+# ## Стек     — matches docs/product/technical-solutions.md's "## Stack"
 # ## Команды  — matches the CI = local command block (ruling: CI is single
 #               source of truth, see skills/brief conventions)
 # ## Правила  — project-specific rules / hard constraints section
@@ -108,7 +108,7 @@ fail() { # <reason> [hint]
 # --- parse argv --------------------------------------------------------------
 
 CLAUDE_MD="CLAUDE.md"
-ARCHITECTURE_MD="ARCHITECTURE.md"
+ARCHITECTURE_MD="docs/architecture.md"
 INVARIANTS_MD=".claude/state/invariants.md"
 
 while [ $# -gt 0 ]; do
@@ -173,7 +173,7 @@ else:
                 "detail": f"missing required section: ## {section}",
             })
 
-# --- ARCHITECTURE.md + invariants.md (FORBIDDEN_EDGE) ------------------------
+# --- docs/architecture.md + invariants.md (FORBIDDEN_EDGE) ------------------------
 
 if not os.path.isfile(architecture_md):
     violations.append({"check": "architecture-md-missing", "detail": f"not found: {architecture_md}"})
@@ -293,7 +293,7 @@ else:
 
 ok = len(violations) == 0
 reason = None if ok else f"{len(violations)} meta violation(s)"
-hint = None if ok else "fix CLAUDE.md/ARCHITECTURE.md/.claude/state/ci-mirror.sh per data.violations and rerun check-meta.sh"
+hint = None if ok else "fix CLAUDE.md/docs/architecture.md/.claude/state/ci-mirror.sh per data.violations and rerun check-meta.sh"
 print(json.dumps({"ok": ok, "reason": reason, "hint": hint, "data": {"violations": violations}}))
 '
 )"

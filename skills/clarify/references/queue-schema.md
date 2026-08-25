@@ -1,6 +1,6 @@
 # Queue record schema
 
-Load when: reading or writing `project_brief/clarify_queue.jsonl`.
+Load when: reading or writing `docs/product/clarify-queue.jsonl`.
 
 One JSON object per line (JSONL). Fields, verbatim:
 

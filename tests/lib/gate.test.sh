@@ -28,11 +28,11 @@ new_project_dir() {
   mktemp -d -p "$tmproot"
 }
 
-# valid project_brief/ fixture (presence + non-empty content for all required headers)
+# valid docs/product/ fixture (presence + non-empty content for all required headers)
 write_valid_brief() {
   local dir="$1"
-  mkdir -p "$dir/project_brief"
-  cat >"$dir/project_brief/technical_solutions.md" <<'EOF'
+  mkdir -p "$dir/docs/product"
+  cat >"$dir/docs/product/technical-solutions.md" <<'EOF'
 # Technical solutions
 
 ## Stack
@@ -47,7 +47,7 @@ argon2id + JWT RTR
 ## Deploy
 Docker Compose via Dokploy
 EOF
-  cat >"$dir/project_brief/business_logic.md" <<'EOF'
+  cat >"$dir/docs/product/business-logic.md" <<'EOF'
 # Business logic
 
 ## Goal
@@ -67,12 +67,12 @@ It works.
 EOF
 }
 
-# project_brief/ fixture with headers present but empty sections (presence-only valid,
+# docs/product/ fixture with headers present but empty sections (presence-only valid,
 # content-invalid — used to differentiate clarify (presence) from bootstrap (content)).
 write_headers_only_brief() {
   local dir="$1"
-  mkdir -p "$dir/project_brief"
-  cat >"$dir/project_brief/technical_solutions.md" <<'EOF'
+  mkdir -p "$dir/docs/product"
+  cat >"$dir/docs/product/technical-solutions.md" <<'EOF'
 ## Stack
 
 ## Services
@@ -81,7 +81,7 @@ write_headers_only_brief() {
 
 ## Deploy
 EOF
-  cat >"$dir/project_brief/business_logic.md" <<'EOF'
+  cat >"$dir/docs/product/business-logic.md" <<'EOF'
 ## Goal
 
 ## Roles
@@ -114,7 +114,7 @@ run_gate "$d2" brief
 assert_eq "(2) brief with CLAUDE.md exit code" "1" "$G_EXIT"
 assert_eq "(2) brief with CLAUDE.md ok:false" "False" "$(json_field "$G_OUT" 'd["ok"]')"
 
-# --- (3) brief: valid project_brief/ + raw leftover file -> recovery archive-only
+# --- (3) brief: valid docs/product/ + raw leftover file -> recovery archive-only
 
 d3="$(new_project_dir)"
 write_valid_brief "$d3"
@@ -124,7 +124,7 @@ assert_eq "(3) brief archive-only exit code" "1" "$G_EXIT"
 assert_eq "(3) brief archive-only ok:false" "False" "$(json_field "$G_OUT" 'd["ok"]')"
 assert_eq "(3) brief archive-only recovery" "archive-only" "$(json_field "$G_OUT" 'd["data"]["recovery"]')"
 
-# --- (4) clarify: no project_brief/ -> ok:false, exit 1 ---------------------
+# --- (4) clarify: no docs/product/ -> ok:false, exit 1 ---------------------
 
 d4="$(new_project_dir)"
 run_gate "$d4" clarify
@@ -144,7 +144,7 @@ assert_eq "(5) clarify presence-only ok:true" "True" "$(json_field "$G_OUT" 'd["
 d6="$(new_project_dir)"
 write_headers_only_brief "$d6"
 # drop the "## Deploy" header entirely
-printf '## Stack\n\n## Services\n\n## Auth\n' >"$d6/project_brief/technical_solutions.md"
+printf '## Stack\n\n## Services\n\n## Auth\n' >"$d6/docs/product/technical-solutions.md"
 run_gate "$d6" clarify
 assert_eq "(6) clarify missing header exit code" "1" "$G_EXIT"
 assert_eq "(6) clarify missing header ok:false" "False" "$(json_field "$G_OUT" 'd["ok"]')"

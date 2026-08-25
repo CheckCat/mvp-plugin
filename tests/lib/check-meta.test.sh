@@ -35,7 +35,7 @@ for v in d["data"]["violations"]:
 
 # Every fixture gets a VALID .claude/state/ci-mirror.sh by default — it is a
 # check-meta gate now (a real bootstrap always has one by Step 3.2), so the
-# cases that are about CLAUDE.md/ARCHITECTURE.md must not trip over it.
+# cases that are about CLAUDE.md/docs/architecture.md must not trip over it.
 # check-meta.sh now EXECUTES this mirror (not just `bash -n`), so the default
 # must be guard-safe on the empty fixture tree (no pyproject.toml here) —
 # same existence-guard pattern as skills/bootstrap/SKILL.md Step 3.2's
@@ -70,8 +70,8 @@ EOF
 }
 
 write_valid_architecture_md() { # <dir>
-  mkdir -p "$1"
-  cat >"$1/ARCHITECTURE.md" <<'EOF'
+  mkdir -p "$1/docs"
+  cat >"$1/docs/architecture.md" <<'EOF'
 # Architecture
 
 ```mermaid
@@ -95,7 +95,7 @@ run_cm() { # <projectdir> <arg...> -> sets CM_OUT CM_EXIT
   fi
 }
 
-# --- (a) valid CLAUDE.md + valid ARCHITECTURE.md, no invariants -> ok:true --
+# --- (a) valid CLAUDE.md + valid docs/architecture.md, no invariants -> ok:true --
 
 d_a="$(new_project_dir)"
 write_valid_claude_md "$d_a"
@@ -152,7 +152,7 @@ if ! printf '%s' "$SEC_C" | grep -q "Правила"; then
   fail=1
 fi
 
-# --- (d) ARCHITECTURE.md forbidden edge (glob rule) -> violation ------------
+# --- (d) docs/architecture.md forbidden edge (glob rule) -> violation ------------
 
 d_d="$(new_project_dir)"
 write_valid_claude_md "$d_d"
@@ -162,7 +162,7 @@ cat >"$d_d/.claude/state/invariants.md" <<'EOF'
 
 FORBIDDEN_EDGE: integration-* --> DB
 EOF
-cat >"$d_d/ARCHITECTURE.md" <<'EOF'
+mkdir -p "$d_d/docs"; cat >"$d_d/docs/architecture.md" <<'EOF'
 # Architecture
 
 ```mermaid
@@ -182,7 +182,7 @@ if ! printf '%s' "$EDGE_D" | grep -q "integration-tiktok"; then
   fail=1
 fi
 
-# --- (e) ARCHITECTURE.md clean diagram (same rule, no matching edge) -> ok:true
+# --- (e) docs/architecture.md clean diagram (same rule, no matching edge) -> ok:true
 
 d_e="$(new_project_dir)"
 write_valid_claude_md "$d_e"
@@ -190,7 +190,7 @@ mkdir -p "$d_e/.claude/state"
 cat >"$d_e/.claude/state/invariants.md" <<'EOF'
 FORBIDDEN_EDGE: integration-* --> DB
 EOF
-cat >"$d_e/ARCHITECTURE.md" <<'EOF'
+mkdir -p "$d_e/docs"; cat >"$d_e/docs/architecture.md" <<'EOF'
 # Architecture
 
 ```mermaid
@@ -214,7 +214,7 @@ mkdir -p "$d_e2/.claude/state"
 cat >"$d_e2/.claude/state/invariants.md" <<'EOF'
 FORBIDDEN_EDGE: integration-* --> DB
 EOF
-cat >"$d_e2/ARCHITECTURE.md" <<'EOF'
+mkdir -p "$d_e2/docs"; cat >"$d_e2/docs/architecture.md" <<'EOF'
 # Architecture
 
 ```mermaid

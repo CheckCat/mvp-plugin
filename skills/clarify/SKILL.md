@@ -1,17 +1,17 @@
 ---
 name: clarify
-description: Use after mvp:brief to audit project_brief/ for gaps, contradictions and grey zones before bootstrap
+description: Use after mvp:brief to audit docs/product/ for gaps, contradictions and grey zones before bootstrap
 ---
 
 # mvp:clarify
 
 **Announce at start:** «Using mvp:clarify to audit the project brief».
 
-**Iron Law: Не выдумывай факты и не выдумывай дыры; каждая находка обязана иметь evidence-цитату из brief'а.** `evidence[]` — либо буквальная цитата из `project_brief/*.md`, либо явное «секция X пуста» (тоже сигнал, не выдумка).
+**Iron Law: Не выдумывай факты и не выдумывай дыры; каждая находка обязана иметь evidence-цитату из brief'а.** `evidence[]` — либо буквальная цитата из `docs/product/*.md`, либо явное «секция X пуста» (тоже сигнал, не выдумка).
 
 Каждый результат скрипта — последняя строка stdout, JSON `{"ok","reason","hint","data"}`. При `ok:false` — два исхода: почини по `hint` и повтори, либо Stop&Ask. `state.json` руками не редактируется — только через `state.sh`.
 
-**Разделение труда:** находки (Pass 1) и refute (Pass 2) — суждение, ты пишешь `clarify_queue.jsonl` сам через Edit/Write. Всякий **подсчёт и верификация** (сколько critical, что не applied, инвариант) — только `scripts/queue-check.sh`, никогда прикидка в prose. Оператор видит цифры из `data.counts`, не твой пересчёт в чате.
+**Разделение труда:** находки (Pass 1) и refute (Pass 2) — суждение, ты пишешь `clarify-queue.jsonl` сам через Edit/Write. Всякий **подсчёт и верификация** (сколько critical, что не applied, инвариант) — только `scripts/queue-check.sh`, никогда прикидка в prose. Оператор видит цифры из `data.counts`, не твой пересчёт в чате.
 
 ## Шаг 1 — гейт
 
@@ -24,7 +24,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/gate.sh clarify
 ## Шаг 2 — resume-check
 
 ```bash
-test -f project_brief/clarify_queue.jsonl
+test -f docs/product/clarify-queue.jsonl
 ```
 
 Очередь уже существует → **резюмируй**: пропусти Шаги 3–4 (аудит и refute уже сделаны), иди сразу в Шаг 5. **Никакого `--force`/`--restart`** — v2 не пересоздаёт очередь с нуля флагом; хочет заново — ручной `rm` + Stop&Ask подтверждение.
@@ -33,7 +33,7 @@ test -f project_brief/clarify_queue.jsonl
 
 ## Шаг 3 — аудит brief'а (Pass 1: formulate)
 
-Прочитай `business_logic.md`, `technical_solutions.md`, `glossary.md`/`analysis_grey_zones.md` (если есть). Ищи противоречия, пустые обязательные секции, дыры в бизнес-логике/стеке — три класса находок, как в v1 (inconsistency / business / stack). Для каждой: `2 ≤ len(options) ≤ 4`, `severity` по критерию из `references/refute-prompt.md` (Severity-классификация). Запиши в `project_brief/clarify_queue.jsonl` (схема — `references/queue-schema.md`, load lazily) сразу в форме, где инвариант держится: `options[0] = recommended_v1`, `recommended = recommended_v1`, `rationale = rationale_v1`, `status: pending`. **Ни одна запись не покидает этот шаг с `recommended: null`** — Шаг 4 перезаписывает эти поля результатом refute, но не обязан заполнять их впервые.
+Прочитай `business-logic.md`, `technical-solutions.md`, `glossary.md`/`analysis-grey-zones.md` (если есть). Ищи противоречия, пустые обязательные секции, дыры в бизнес-логике/стеке — три класса находок, как в v1 (inconsistency / business / stack). Для каждой: `2 ≤ len(options) ≤ 4`, `severity` по критерию из `references/refute-prompt.md` (Severity-классификация). Запиши в `docs/product/clarify-queue.jsonl` (схема — `references/queue-schema.md`, load lazily) сразу в форме, где инвариант держится: `options[0] = recommended_v1`, `recommended = recommended_v1`, `rationale = rationale_v1`, `status: pending`. **Ни одна запись не покидает этот шаг с `recommended: null`** — Шаг 4 перезаписывает эти поля результатом refute, но не обязан заполнять их впервые.
 
 Ноль находок — валидный исход. Не выдумывай дыры в полном brief'е.
 
@@ -76,7 +76,7 @@ ${CLAUDE_PLUGIN_ROOT}/skills/clarify/scripts/queue-check.sh
 
 ## Шаг 7 — применение ответов к brief'у
 
-Для каждой `answered_human`/`answered_auto` записи — Edit точечно в нужную секцию `project_brief/*.md` (переопределяет факт → перепиши секцию целиком; уточняет → append с `<!-- clarify <date>: <Q-id> -->` маркером), затем сразу переведи статус этой записи в `applied`. Не пачкой в конце — крэш посередине не должен молча терять факт «применено, но статус не обновлён» (см. Red flags).
+Для каждой `answered_human`/`answered_auto` записи — Edit точечно в нужную секцию `docs/product/*.md` (переопределяет факт → перепиши секцию целиком; уточняет → append с `<!-- clarify <date>: <Q-id> -->` маркером), затем сразу переведи статус этой записи в `applied`. Не пачкой в конце — крэш посередине не должен молча терять факт «применено, но статус не обновлён» (см. Red flags).
 
 ## Шаг 8 — queue-check
 
@@ -100,7 +100,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh set phase clarify-done
 ${CLAUDE_PLUGIN_ROOT}/lib/finalize.sh clarify <msg-file>
 ```
 
-`<msg-file>` первой строкой: `chore: clarify brief`. Коммитит `project_brief` + `state.json`.
+`<msg-file>` первой строкой: `chore: clarify brief`. Коммитит `docs/product` + `state.json`.
 
 ## Rationalization table (red flags)
 

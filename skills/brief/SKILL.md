@@ -1,6 +1,6 @@
 ---
 name: brief
-description: Use when starting the MVP pipeline on a fresh project from raw idea/description files (any format) that need packaging into project_brief/
+description: Use when starting the MVP pipeline on a fresh project from raw idea/description files (any format) that need packaging into docs/product/
 ---
 
 # mvp:brief
@@ -17,7 +17,7 @@ description: Use when starting the MVP pipeline on a fresh project from raw idea
 ${CLAUDE_PLUGIN_ROOT}/lib/gate.sh brief
 ```
 
-`ok:false` с `data.recovery == "archive-only"` — project_brief/ уже валиден, но исходники не заархивированы (крэш между swap и archive). Пропусти шаги 3–4 и swap (5.1) — они уже сделаны. Выполни discover (шаг 2), чтобы найти неархивированный SOURCE, затем archive (5.2) над ним, затем продолжи с шага 6.
+`ok:false` с `data.recovery == "archive-only"` — docs/product/ уже валиден, но исходники не заархивированы (крэш между swap и archive). Пропусти шаги 3–4 и swap (5.1) — они уже сделаны. Выполни discover (шаг 2), чтобы найти неархивированный SOURCE, затем archive (5.2) над ним, затем продолжи с шага 6.
 
 Любой другой `ok:false` — Stop&Ask с `reason`/`hint` как есть; mvp:brief работает только на пустом/свежем проекте.
 
@@ -35,12 +35,12 @@ ${CLAUDE_PLUGIN_ROOT}/skills/brief/scripts/package-brief.sh discover
 ## Шаг 3 — упаковка (единственное творческое место)
 
 1. `skeleton <tmpdir>` — создаёт `<tmpdir>` с 4 каноническими файлами и всеми обязательными заголовками (`lib/brief-contract.sh`) пустыми.
-2. Прочитай все файлы SOURCE, разложи факты по секциям через `Edit`: `business_logic.md` (Goal, Roles, Core scenarios, MVP scope, Success criteria), `technical_solutions.md` (Stack — формат `- backend: <v>` бюллетами, Services, Auth, Deploy). `glossary.md`/`analysis_grey_zones.md` — только если в источниках есть термины / явные «решили X, а не Y».
+2. Прочитай все файлы SOURCE, разложи факты по секциям через `Edit`: `business-logic.md` (Goal, Roles, Core scenarios, MVP scope, Success criteria), `technical-solutions.md` (Stack — формат `- backend: <v>` бюллетами, Services, Auth, Deploy). `glossary.md`/`analysis-grey-zones.md` — только если в источниках есть термины / явные «решили X, а не Y».
 3. **Не выдумывай факты.** Нет данных под секцией — секция остаётся пустой (заголовок без контента — норма, закрывает её mvp:clarify). Не дублируй контент между файлами.
 
 ## Шаг 4 — Stop&Ask по стеку
 
-Проверь `## Stack` в `<tmpdir>/technical_solutions.md`. Stop&Ask (`AskUserQuestion`, options из allowlist `backend∈{nestjs,fastapi}` / `frontend∈{nextjs,react,none}` / `deploy∈{docker-dokploy}` / `db⊇{postgresql}`) обязателен при ЛЮБОМ из:
+Проверь `## Stack` в `<tmpdir>/technical-solutions.md`. Stop&Ask (`AskUserQuestion`, options из allowlist `backend∈{nestjs,fastapi}` / `frontend∈{nextjs,react,none}` / `deploy∈{docker-dokploy}` / `db⊇{postgresql}`) обязателен при ЛЮБОМ из:
 
 1. **Не указан** — источники вообще не называют технологию.
 2. **Не в allowlist** — названо что-то вне списка (`spring-boot`, `vue`, ...).
@@ -55,7 +55,7 @@ ${CLAUDE_PLUGIN_ROOT}/skills/brief/scripts/package-brief.sh discover
 ```
 ${CLAUDE_PLUGIN_ROOT}/skills/brief/scripts/package-brief.sh swap <tmpdir>
 ```
-Если в проекте уже был `project_brief/` — Stop&Ask ДО этого вызова: «project_brief/ уже существует, пересоздать?» (да → продолжай, старое уйдёт в `project_brief.bak.<ts>/` атомарно; нет → exit, ничего не трогай).
+Если в проекте уже был `docs/product/` — Stop&Ask ДО этого вызова: «docs/product/ уже существует, пересоздать?» (да → продолжай, старое уйдёт в `docs/product.bak.<ts>/` атомарно; нет → exit, ничего не трогай).
 
 5.2.
 ```
@@ -82,7 +82,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh set phase brief-done
 ```
 ${CLAUDE_PLUGIN_ROOT}/lib/finalize.sh brief <msg-file>
 ```
-`<msg-file>` первой строкой содержит `chore: package project brief`. Коммитит только `project_brief` + `project_brief.raw` — `state.json` в коммит не входит (закоммитит mvp:clarify).
+`<msg-file>` первой строкой содержит `chore: package project brief`. Коммитит только `docs/product` + `docs/product/_raw` — `state.json` в коммит не входит (закоммитит mvp:clarify).
 
 ## Recreate существующего brief
 
@@ -98,7 +98,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/finalize.sh brief <msg-file>
 ## HARD-GATE
 
 Прежде чем объявить шаг завершённым, покажи оператору:
-- что куда легло (пути к 4 файлам `project_brief/`, что заполнено / оставлено пустым);
+- что куда легло (пути к 4 файлам `docs/product/`, что заполнено / оставлено пустым);
 - распознанный стек (`backend`/`frontend`/`deploy`/`db`, из шага 4).
 
 Дождись подтверждения. Затем:

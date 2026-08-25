@@ -1,6 +1,6 @@
 ---
 name: plan
-description: Use after mvp:bootstrap to produce plan.json (task DAG) and PROJECT_PLAN.md
+description: Use after mvp:bootstrap to produce plan.json (task DAG) and docs/plan.md
 ---
 
 # mvp:plan
@@ -17,13 +17,13 @@ description: Use after mvp:bootstrap to produce plan.json (task DAG) and PROJECT
 ${CLAUDE_PLUGIN_ROOT}/lib/gate.sh plan
 ```
 
-`ok:false` с `data.recovery == "finalize-plan"` — `plan.json` уже существует и валиден, но не закоммичен (крэш между Шагом 3 и Шагом 5). Не зови планнера заново — предложи оператору доделать: сразу перейди к Шагу 4 (PROJECT_PLAN.md может быть уже сгенерирован — проверь) и Шагу 5 (`finalize.sh plan`).
+`ok:false` с `data.recovery == "finalize-plan"` — `plan.json` уже существует и валиден, но не закоммичен (крэш между Шагом 3 и Шагом 5). Не зови планнера заново — предложи оператору доделать: сразу перейди к Шагу 4 (docs/plan.md может быть уже сгенерирован — проверь) и Шагу 5 (`finalize.sh plan`).
 
 Любой другой `ok:false` — Stop&Ask с `reason`/`hint` как есть.
 
 ## Шаг 2 — планнер-субагент
 
-Дёрни Agent tool, `subagent_type: general-purpose` (нужен Write — планнер пишет `plan.json` напрямую). Промпт — секция «Planner prompt» ниже ДОСЛОВНО. Планнер сам читает пути (`project_brief/`, `.claude/state/invariants.md`, `ARCHITECTURE.md`) — ему передаются пути, не содержимое.
+Дёрни Agent tool, `subagent_type: general-purpose` (нужен Write — планнер пишет `plan.json` напрямую). Промпт — секция «Planner prompt» ниже ДОСЛОВНО. Планнер сам читает пути (`docs/product/`, `.claude/state/invariants.md`, `docs/architecture.md`) — ему передаются пути, не содержимое.
 
 Планнер пишет `.claude/state/plan.json` целиком через Write — **единственное место, где `plan.json` создаётся**; дальше файл трогает только `lib/plan-io.mjs`. Жди от планнера ТОЛЬКО счётчики (фазы/задачи/estimate) — не план текстом, он уже в файле.
 
@@ -37,7 +37,7 @@ ${CLAUDE_PLUGIN_ROOT}/skills/plan/scripts/validate-plan.py
 
 `ok:true` → `data.total_estimate` — единственный источник суммарной оценки для Шага 4/HARD-GATE, не пересчитывай сам.
 
-## Шаг 4 — PROJECT_PLAN.md
+## Шаг 4 — docs/plan.md
 
 ```
 ${CLAUDE_PLUGIN_ROOT}/lib/plan-io.mjs summary
@@ -76,7 +76,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh set phase plan-done
 ${CLAUDE_PLUGIN_ROOT}/lib/finalize.sh plan <msg-file>
 ```
 
-`<msg-file>` первой строкой: `chore: project plan v1`. Коммитит `.claude/state` + `PROJECT_PLAN.md` (пресет `plan`).
+`<msg-file>` первой строкой: `chore: project plan v1`. Коммитит `.claude/state` + `docs/plan.md` (пресет `plan`).
 
 ## Planner prompt
 
@@ -88,12 +88,12 @@ ${CLAUDE_PLUGIN_ROOT}/lib/finalize.sh plan <msg-file>
 короткую сводку (число фаз, число задач, суммарный estimate_tokens).
 
 Входные пути (прочитай их сам — тебе передали пути, не содержимое):
-- `project_brief/` — все .md файлы (business_logic.md, technical_solutions.md,
-  glossary.md, analysis_grey_zones.md — если есть)
+- `docs/product/` — все .md файлы (business-logic.md, technical-solutions.md,
+  glossary.md, analysis-grey-zones.md — если есть)
 - `.claude/state/invariants.md` — архитектурные инварианты ИМЕННО ЭТОГО
   проекта (Architectural invariants / Service boundaries / Forbidden edges).
   Не выдумывай других инвариантов, которых там нет.
-- `ARCHITECTURE.md` — карта сервисов проекта
+- `docs/architecture.md` — карта сервисов проекта
 
 ## Декомпозиция
 
@@ -137,7 +137,7 @@ exhaustive-контракт (не перечисляй тесты/lock-файл�
   `depends_on` ссылается на такие же bare id.
 - `title` — одно предложение.
 - `level` — см. выше, целое число (номер фазы).
-- `service` — имя сервиса из ARCHITECTURE.md ИЛИ `"root"` для cross-cutting.
+- `service` — имя сервиса из docs/architecture.md ИЛИ `"root"` для cross-cutting.
 - `service_path` — relative путь к корню сервиса (`"."` для root).
 - `role` — РОВНО одно из: `backend-implementer`, `frontend-implementer`,
   `test-writer`, `devops-engineer`, `integration-specialist`. Не выдумывай
@@ -182,7 +182,7 @@ exhaustive-контракт (не перечисляй тесты/lock-файл�
 Прежде чем объявить шаг завершённым, покажи оператору:
 - фазы плана (номера `level` + сколько задач в каждой);
 - общее число задач и `data.total_estimate` (Шаг 3, не пересчитанное);
-- `PROJECT_PLAN.md` целиком или ссылку на него.
+- `docs/plan.md` целиком или ссылку на него.
 
 Дождись подтверждения. **Build стартует только явной командой оператора**, не автоматически.
 

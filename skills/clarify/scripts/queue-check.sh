@@ -7,7 +7,7 @@
 #   {"ok":bool,"reason":str|null,"hint":str|null,"data":object|null}
 # ok:false always exits 1.
 #
-# <queue-file> defaults to project_brief/clarify_queue.jsonl. A missing file
+# <queue-file> defaults to docs/product/clarify-queue.jsonl. A missing file
 # is treated as an empty queue (ok:true, all counts 0) — zero findings is a
 # valid clarify outcome (see SKILL.md anti-patterns), not an error state.
 #
@@ -109,7 +109,7 @@ if [ $# -gt 1 ]; then
   fail "unexpected argument: $2" "$USAGE"
 fi
 
-QUEUE="${1:-project_brief/clarify_queue.jsonl}"
+QUEUE="${1:-docs/product/clarify-queue.jsonl}"
 
 if [ ! -f "$QUEUE" ]; then
   ZERO='{"unapplied":[],"counts":{"critical":0,"medium":0,"low":0,"pending_critical":0,"pending_medium":0,"pending_low":0,"pending_total":0}}'

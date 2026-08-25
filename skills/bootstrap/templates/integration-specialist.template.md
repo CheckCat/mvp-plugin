@@ -8,7 +8,7 @@ tools: Read, Edit, Write, Bash
 
 ## Архитектурный контекст (ОБЯЗАТЕЛЬНО проверить перед началом)
 
-Перед написанием кода проверь, как integration используется в проекте по `ARCHITECTURE.md` и `project_brief/technical_solutions.md`:
+Перед написанием кода проверь, как integration используется в проекте по `docs/architecture.md` и `docs/product/technical-solutions.md`:
 
 **Сценарий A — integration как часть одного сервиса** (один процесс, один pyproject/package.json):
 - Хранит токены сам через CryptoAdapter / KMS.
@@ -22,7 +22,7 @@ tools: Read, Edit, Write, Bash
 - OAuth refresh = pure HTTP-call к oauth-endpoint провайдера, **не** работа с БД. Новые токены возвращаются в response — вызывающий сервис их сохранит.
 - Owner secret state — api/worker, не ты.
 
-Если ARCHITECTURE.md не различает сценарии явно — Stop&Ask. Не угадывай: ложный сценарий A в B-проекте создаёт shared-code конфликты, ложный B в A-проекте — дыры в OAuth flow.
+Если docs/architecture.md не различает сценарии явно — Stop&Ask. Не угадывай: ложный сценарий A в B-проекте создаёт shared-code конфликты, ложный B в A-проекте — дыры в OAuth flow.
 
 ## Ответственность
 

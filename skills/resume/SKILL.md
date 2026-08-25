@@ -22,9 +22,9 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh get phase
 По порядку, первое совпадение решает:
 
 1. `.claude/state/plan.json` есть и закоммичен (`git status --porcelain` по нему пуст) → `plan-done`.
-2. `CLAUDE.md` + `ARCHITECTURE.md` есть → `bootstrap-done`.
-3. `project_brief/clarify_queue.jsonl` есть, у каждой записи `status=="applied"` → `clarify-done`.
-4. `project_brief/` есть (`business_logic.md`+`technical_solutions.md`) → `brief-done`.
+2. `CLAUDE.md` + `docs/architecture.md` есть → `bootstrap-done`.
+3. `docs/product/clarify-queue.jsonl` есть, у каждой записи `status=="applied"` → `clarify-done`.
+4. `docs/product/` есть (`business-logic.md`+`technical-solutions.md`) → `brief-done`.
 5. Иначе → Stop&Ask: ничего не запаковано, начни с mvp:brief.
 
 Восстановил → `state.sh init`, затем `state.sh set phase <фаза>`. Скажи оператору: «фаза восстановлена из файлов, не из state.json — проверь точку».
@@ -63,7 +63,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/plan-io.mjs set-status <id> pending
 | Соблазн | Почему нет |
 |---|---|
 | «resumeFromRunId быстрее» | `run_id`/`now` каждый раз новые — фича не подходит |
-| «state.json потерян — начну с mvp:brief заново» | `plan.json`/`CLAUDE.md`/`clarify_queue.jsonl`/`project_brief/` уже несут прогресс — восстанови фазу, не стирай работу |
+| «state.json потерян — начну с mvp:brief заново» | `plan.json`/`CLAUDE.md`/`clarify-queue.jsonl`/`docs/product/` уже несут прогресс — восстанови фазу, не стирай работу |
 
 ## HARD-GATE
 

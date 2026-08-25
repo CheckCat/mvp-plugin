@@ -74,7 +74,7 @@ package = true
 {{SERVICE_API}} = { path = "../api", editable = true }
 ```
 
-`services/beat/` — аналогично worker. `services/integration-*` — **stateless**, без `{{SERVICE_API}}` зависимости (инвариант B из ARCHITECTURE.md).
+`services/beat/` — аналогично worker. `services/integration-*` — **stateless**, без `{{SERVICE_API}}` зависимости (инвариант B из docs/architecture.md).
 
 ## Dockerfile-правила (Python multi-stage)
 

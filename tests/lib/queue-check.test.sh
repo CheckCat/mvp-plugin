@@ -27,18 +27,18 @@ json_field() { # <json> <python-expr-on-d>
 new_project_dir() {
   local d
   d="$(mktemp -d -p "$tmproot")"
-  mkdir -p "$d/project_brief"
+  mkdir -p "$d/docs/product"
   (cd "$d" && "$state" init >/dev/null)
   printf '%s' "$d"
 }
 
-# write_queue <dir> <line>...  — writes project_brief/clarify_queue.jsonl
+# write_queue <dir> <line>...  — writes docs/product/clarify-queue.jsonl
 write_queue() {
   local dir="$1"; shift
-  : >"$dir/project_brief/clarify_queue.jsonl"
+  : >"$dir/docs/product/clarify-queue.jsonl"
   local line
   for line in "$@"; do
-    printf '%s\n' "$line" >>"$dir/project_brief/clarify_queue.jsonl"
+    printf '%s\n' "$line" >>"$dir/docs/product/clarify-queue.jsonl"
   done
 }
 
@@ -175,7 +175,7 @@ assert_eq "(5b) resume mix counts.pending_total" "3" "$(json_field "$Q_OUT" 'd["
 # --- (6) argv guard: unexpected extra argument -> ok:false, usage hint ------
 
 d6="$(new_project_dir)"
-Q_OUT="$(cd "$d6" && "$qc" project_brief/clarify_queue.jsonl extra-arg 2>/tmp/mvp-qc-test-err)"
+Q_OUT="$(cd "$d6" && "$qc" docs/product/clarify-queue.jsonl extra-arg 2>/tmp/mvp-qc-test-err)"
 Q_EXIT=$?
 assert_eq "(6) argv guard exit code" "1" "$Q_EXIT"
 assert_eq "(6) argv guard ok:false" "False" "$(json_field "$Q_OUT" 'd["ok"]')"
@@ -190,7 +190,7 @@ fi
 # state that gate.sh will later trust.
 
 d6b="$(mktemp -d -p "$tmproot")"
-mkdir -p "$d6b/project_brief"   # note: NO state.sh init
+mkdir -p "$d6b/docs/product"   # note: NO state.sh init
 write_queue "$d6b" "$(rec Q-001 low applied auto '["A"]' A)"
 run_qc "$d6b"
 assert_eq "(6b) state write failure exit code" "1" "$Q_EXIT"
@@ -209,7 +209,7 @@ assert_eq "(6b) output is single line" "0" "$lines_6b"
 # --- (6c) same, on the missing-queue-file path (zero-counts branch) ---------
 
 d6c="$(mktemp -d -p "$tmproot")"
-mkdir -p "$d6c/project_brief"   # no state.json, no queue file either
+mkdir -p "$d6c/docs/product"   # no state.json, no queue file either
 run_qc "$d6c"
 assert_eq "(6c) missing-queue + no state exit code" "1" "$Q_EXIT"
 assert_eq "(6c) missing-queue + no state ok:false" "False" "$(json_field "$Q_OUT" 'd["ok"]')"

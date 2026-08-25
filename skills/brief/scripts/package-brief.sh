@@ -20,8 +20,8 @@
 #                        0/1/>1 candidates (Stop&Ask lives in SKILL.md, not
 #                        here).
 #   skeleton <dir>    — ensure <dir> has the 4 canonical brief files
-#                        (technical_solutions.md, business_logic.md,
-#                        glossary.md, analysis_grey_zones.md) with every
+#                        (technical-solutions.md, business-logic.md,
+#                        glossary.md, analysis-grey-zones.md) with every
 #                        required header (lib/brief-contract.sh) present.
 #                        Missing headers are appended at EOF in contract
 #                        order; existing headers/content are never touched
@@ -33,28 +33,28 @@
 #                        already present (an operator's/LLM's own Layout is
 #                        never overwritten). data:{"headers_added":{...},
 #                        "services_count":N,"layout":str|null}
-#   swap <tmpdir>     — atomically move <tmpdir> to ./project_brief. If
-#                        project_brief already exists, back it up first to
-#                        project_brief.bak.<ts> (collision-suffixed if the
+#   swap <tmpdir>     — atomically move <tmpdir> to ./docs/product. If
+#                        docs/product already exists, back it up first to
+#                        docs/product.bak.<ts> (collision-suffixed if the
 #                        same timestamp is already taken). data:{"target":
-#                        "project_brief","backup":str|null}
+#                        "docs/product","backup":str|null}
 #   archive <src>...  — no-clobber move of raw sources into
-#                        ./project_brief.raw (created if missing). Each
+#                        ./docs/product/_raw (created if missing). Each
 #                        <src> may be a file (moved as-is) or a directory
 #                        (its contents are moved, dotglob — dotfiles
 #                        included; the directory itself is not nested into
-#                        project_brief.raw). All sources are pre-checked for
+#                        docs/product/_raw). All sources are pre-checked for
 #                        basename collisions (against the existing raw/ dir
 #                        AND against each other) before anything is moved:
 #                        any collision aborts the whole operation with
 #                        ok:false and data:{"conflicts":[...]} instead of
 #                        silently clobbering or partially moving — the skill
 #                        resolves conflicts via AskUserQuestion and reruns.
-#                        Success: data:{"dest":"project_brief.raw","moved":[...]}
+#                        Success: data:{"dest":"docs/product/_raw","moved":[...]}
 #
 # Stack section format this script expects/writes (there is no canonical
 # format enforced by lib/brief-contract.sh — mvp:brief owns it since it's
-# the skill that authors technical_solutions.md):
+# the skill that authors technical-solutions.md):
 #   ## Stack
 #   - backend: fastapi
 #   - frontend: react
@@ -69,7 +69,13 @@ source "$here/../../../lib/brief-contract.sh"
 
 USAGE="usage: package-brief.sh <discover [path]|skeleton <dir>|swap <tmpdir>|archive <src>...>"
 
-STANDARD_DIRS=(project_prompt_files project_brief.raw brief docs spec requirements)
+# `docs` is deliberately NOT a source directory: it is now the pipeline's
+# OUTPUT root (docs/product/, docs/architecture.md, docs/plan.md). Leaving it
+# here would make discover treat the brief's own destination as raw input, and
+# `archive docs` would then move docs/product into docs/product/_raw — a
+# directory swallowing itself. Operators put raw material in
+# project_prompt_files/ (the documented path), brief/, spec/ or requirements/.
+STANDARD_DIRS=(project_prompt_files docs/product/_raw brief spec requirements)
 STANDARD_ROOT_FILES=(
   README.md CLAUDE.md ARCHITECTURE.md PROJECT_PLAN.md REVIEW.md
   LICENSE.md LICENSE CHANGELOG.md CONTRIBUTING.md SECURITY.md
@@ -206,10 +212,10 @@ cmd_skeleton() {
   fi
   mkdir -p "$dir"
 
-  local tech="$dir/technical_solutions.md"
-  local biz="$dir/business_logic.md"
+  local tech="$dir/technical-solutions.md"
+  local biz="$dir/business-logic.md"
   local glossary="$dir/glossary.md"
-  local grey="$dir/analysis_grey_zones.md"
+  local grey="$dir/analysis-grey-zones.md"
   [ -f "$tech" ] || : >"$tech"
   [ -f "$biz" ] || : >"$biz"
   [ -f "$glossary" ] || : >"$glossary"
@@ -234,8 +240,8 @@ import json, sys
 tech_added_raw, biz_added_raw, services_count, layout = sys.argv[1:5]
 d = {
     "headers_added": {
-        "technical_solutions.md": [l for l in tech_added_raw.split("\n") if l],
-        "business_logic.md": [l for l in biz_added_raw.split("\n") if l],
+        "technical-solutions.md": [l for l in tech_added_raw.split("\n") if l],
+        "business-logic.md": [l for l in biz_added_raw.split("\n") if l],
     },
     "services_count": int(services_count),
     "layout": layout or None,
@@ -256,8 +262,14 @@ cmd_swap() {
     fail "tmpdir not found: $tmpdir"
   fi
 
-  local target="project_brief"
+  local target="docs/product"
   local backup=""
+  # The target is nested now (docs/product, not a top-level project_brief), and
+  # `mv` does not create parents: without this the swap fails on a fresh
+  # project, which is the ONLY kind of project mvp:brief runs on.
+  if ! mkdir -p "$(dirname "$target")"; then
+    fail "cannot create parent directory for $target"
+  fi
   if [ -e "$target" ]; then
     local ts n
     ts="$(date +%Y%m%d-%H%M%S)"
@@ -299,7 +311,7 @@ cmd_archive() {
     fi
   done
 
-  local dest="project_brief.raw"
+  local dest="docs/product/_raw"
 
   # Expand directory sources (dotglob) into a flat (source-path, basename)
   # list. The directory itself is never nested into dest — only its

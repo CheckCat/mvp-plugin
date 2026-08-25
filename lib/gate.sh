@@ -81,8 +81,8 @@ headers_valid_all() { # <file> <kind> — presence + non-empty content (bootstra
   validate_headers "$1" "${arr[@]}" 2>/dev/null
 }
 
-project_brief_files_exist() {
-  [ -f project_brief/technical_solutions.md ] && [ -f project_brief/business_logic.md ]
+docs/product_files_exist() {
+  [ -f docs/product/technical-solutions.md ] && [ -f docs/product/business-logic.md ]
 }
 
 git_repo_present() {
@@ -125,16 +125,16 @@ root_raw_files_present() {
   return 1
 }
 
-valid_project_brief() {
-  project_brief_files_exist || return 1
-  headers_valid_all project_brief/technical_solutions.md tech || return 1
-  headers_valid_all project_brief/business_logic.md biz || return 1
+valid_docs/product() {
+  docs/product_files_exist || return 1
+  headers_valid_all docs/product/technical-solutions.md tech || return 1
+  headers_valid_all docs/product/business-logic.md biz || return 1
   return 0
 }
 
 gate_brief() {
-  if valid_project_brief && root_raw_files_present; then
-    emit_result false "project_brief/ packaged but raw source files not archived" \
+  if valid_docs/product && root_raw_files_present; then
+    emit_result false "docs/product/ packaged but raw source files not archived" \
       "crash between swap and archive — run the archive step (mvp:brief resume)" \
       '{"recovery":"archive-only"}'
     exit 1
@@ -162,18 +162,18 @@ gate_brief() {
 # --- clarify -------------------------------------------------------------------
 
 gate_clarify() {
-  if ! project_brief_files_exist; then
-    emit_result false "project_brief/ missing" "run gate brief / mvp:brief first" ""
+  if ! docs/product_files_exist; then
+    emit_result false "docs/product/ missing" "run gate brief / mvp:brief first" ""
     exit 1
   fi
-  if ! headers_present_all project_brief/technical_solutions.md tech; then
-    emit_result false "technical_solutions.md missing required headers" \
-      "add the missing ## headers to project_brief/technical_solutions.md" ""
+  if ! headers_present_all docs/product/technical-solutions.md tech; then
+    emit_result false "technical-solutions.md missing required headers" \
+      "add the missing ## headers to docs/product/technical-solutions.md" ""
     exit 1
   fi
-  if ! headers_present_all project_brief/business_logic.md biz; then
-    emit_result false "business_logic.md missing required headers" \
-      "add the missing ## headers to project_brief/business_logic.md" ""
+  if ! headers_present_all docs/product/business-logic.md biz; then
+    emit_result false "business-logic.md missing required headers" \
+      "add the missing ## headers to docs/product/business-logic.md" ""
     exit 1
   fi
   emit_result true "" "" ""
@@ -183,17 +183,17 @@ gate_clarify() {
 # --- bootstrap -------------------------------------------------------------------
 
 gate_bootstrap() {
-  if ! project_brief_files_exist; then
-    emit_result false "project_brief/ missing" "run gate brief / mvp:brief first" ""
+  if ! docs/product_files_exist; then
+    emit_result false "docs/product/ missing" "run gate brief / mvp:brief first" ""
     exit 1
   fi
-  if ! headers_valid_all project_brief/technical_solutions.md tech; then
-    emit_result false "technical_solutions.md incomplete" \
+  if ! headers_valid_all docs/product/technical-solutions.md tech; then
+    emit_result false "technical-solutions.md incomplete" \
       "fill in missing/empty ## sections (run mvp:clarify)" ""
     exit 1
   fi
-  if ! headers_valid_all project_brief/business_logic.md biz; then
-    emit_result false "business_logic.md incomplete" \
+  if ! headers_valid_all docs/product/business-logic.md biz; then
+    emit_result false "business-logic.md incomplete" \
       "fill in missing/empty ## sections (run mvp:clarify)" ""
     exit 1
   fi

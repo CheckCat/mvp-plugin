@@ -20,7 +20,7 @@
 # ---------------------------------------------------------------------------
 
 # required_headers_tech
-#   Print, one per line, headers that MUST exist in technical_solutions.md.
+#   Print, one per line, headers that MUST exist in technical-solutions.md.
 required_headers_tech() {
   cat <<'EOF'
 ## Stack
@@ -31,7 +31,7 @@ EOF
 }
 
 # required_headers_biz
-#   Print, one per line, headers that MUST exist in business_logic.md.
+#   Print, one per line, headers that MUST exist in business-logic.md.
 required_headers_biz() {
   cat <<'EOF'
 ## Goal

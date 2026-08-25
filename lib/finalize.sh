@@ -8,10 +8,10 @@
 # ok:false always exits 1. Success: data = {"sha": "<full sha>"}.
 #
 # Scope presets (paths staged + committed):
-#   brief      = project_brief project_brief.raw
-#   clarify    = project_brief .claude/state/state.json
-#   bootstrap  = CLAUDE.md ARCHITECTURE.md .claude/agents .claude/state
-#   plan       = .claude/state PROJECT_PLAN.md
+#   brief      = docs/product docs/product/_raw
+#   clarify    = docs/product .claude/state/state.json
+#   bootstrap  = CLAUDE.md docs/architecture.md .claude/agents .claude/state
+#   plan       = .claude/state docs/plan.md
 #   build-task = --files (REQUIRED) + .claude/state (always appended) +
 #                BOUNDARY_EXEMPT paths from .claude/state/invariants.md, if
 #                any (always appended — workspace-shared artifacts a
@@ -96,10 +96,10 @@ fi
 
 PATHS=()
 case "$SCOPE" in
-  brief) PATHS=(project_brief project_brief.raw) ;;
-  clarify) PATHS=(project_brief .claude/state/state.json) ;;
-  bootstrap) PATHS=(CLAUDE.md ARCHITECTURE.md .claude/agents .claude/state) ;;
-  plan) PATHS=(.claude/state PROJECT_PLAN.md) ;;
+  brief) PATHS=(docs/product docs/product/_raw) ;;
+  clarify) PATHS=(docs/product .claude/state/state.json) ;;
+  bootstrap) PATHS=(CLAUDE.md docs/architecture.md .claude/agents .claude/state) ;;
+  plan) PATHS=(.claude/state docs/plan.md) ;;
   build-task) PATHS=("${FILES_ARG[@]}" .claude/state) ;;
 esac
 
