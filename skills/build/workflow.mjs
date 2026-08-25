@@ -1555,6 +1555,29 @@ try {
       // re-derive the list with its own `git status`).
       const haltPayload = { halt: adv.data.halt, detail: adv.data.detail };
       if (adv.data.files !== undefined) haltPayload.files = adv.data.files;
+
+      // all-done is the one halt with a deterministic state consequence, so
+      // the script performs it instead of asking the SKILL to remember.
+      // build/SKILL.md told the controller to run `state.sh set phase done`
+      // here; on the vireo run the controller drove Workflow directly and the
+      // phase sat at `plan-done` through all 55 tasks — which mvp:retro's own
+      // gate then (correctly) refused. Same shape as the concerns bug: a
+      // state write that depends on an LLM remembering is a state write that
+      // eventually does not happen. There is no judgement in this transition
+      // — every task in the plan is done — so it belongs in a script.
+      // Reported, never fatal: a failed phase write must not turn a finished
+      // plan into an error, but it must also not pass silently.
+      if (adv.data.halt === 'all-done') {
+        const phaseSet = await relay(`bash "${lib}/state.sh" set phase done`, {
+          phase: 'Advance',
+          label: 'phase-done',
+          retryable: false,
+        });
+        haltPayload.phase_set = Boolean(phaseSet && phaseSet.ok);
+        if (!phaseSet || !phaseSet.ok) {
+          haltPayload.detail = `${haltPayload.detail || ''} (WARNING: could not set phase=done: ${(phaseSet && phaseSet.reason) || 'unknown'} — mvp:retro will refuse to start until it is set)`.trim();
+        }
+      }
       return withRunLabels(haltPayload);
     }
 
