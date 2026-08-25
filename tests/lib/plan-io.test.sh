@@ -480,4 +480,91 @@ ti = max(i for i, l in enumerate(lines) if l.startswith('Task 002: complete'))
 print(1 if ci < ti else 0)
 " "$dir/.claude/state/ledger.md")"
 
+# ---------------------------------------------------------------------------
+# (O) add-task — a plan discovered mid-run must be able to grow.
+#     Until this verb existed the DAG froze the moment mvp:plan committed it.
+#     Hit twice on vireo; the second time a circular import that broke two
+#     deploy units sat in blockers.md with nowhere to go and was fixed by hand
+#     after the plan had already reported all-done.
+# ---------------------------------------------------------------------------
+
+VALID_TASK='{"title":"Smoke-test entrypoint imports","level":11,"service":"api","service_path":"services/api","role":"test-writer","files":["services/api/tests/test_entrypoint_imports.py"],"depends_on":[],"estimate_tokens":8000,"complexity_class":"follow-pattern"}'
+
+# id is assigned by continuing the sequence when the caller omits it
+dir="$(new_repo)"
+out="$(run_plan_io "$dir" add-task --json "$VALID_TASK")"
+assert_eq "O-1 add-task ok" "True" "$(json_field "$out" 'd["ok"]')"
+assert_eq "O-2 id continues the sequence" "004" "$(json_field "$out" 'd["data"]["task_id"]')"
+assert_eq "O-3 plan grew by one" "4" "$(json_field "$out" 'd["data"]["total"]')"
+assert_eq "O-4 the new task is pending" "pending" \
+  "$(python3 -c "
+import json,sys
+p=json.load(open(sys.argv[1]))
+print([t for t in p['tasks'] if t['id']=='004'][0]['status'])
+" "$dir/.claude/state/plan.json")"
+
+# a caller cannot smuggle in an already-complete task
+dir="$(new_repo)"
+run_plan_io "$dir" add-task --json "$(printf '%s' "$VALID_TASK" | python3 -c "
+import json,sys
+t=json.load(sys.stdin); t['status']='done'; print(json.dumps(t))
+")" >/dev/null
+assert_eq "O-5 status is forced to pending" "pending" \
+  "$(python3 -c "
+import json,sys
+p=json.load(open(sys.argv[1]))
+print([t for t in p['tasks'] if t['id']=='004'][0]['status'])
+" "$dir/.claude/state/plan.json")"
+
+# duplicate id is refused
+dir="$(new_repo)"
+out="$(run_plan_io "$dir" add-task --json "$(printf '%s' "$VALID_TASK" | python3 -c "
+import json,sys
+t=json.load(sys.stdin); t['id']='001'; print(json.dumps(t))
+")")"; rc=$?
+assert_eq "O-6 duplicate id exit code" "1" "$rc"
+assert_eq "O-7 duplicate id ok:false" "False" "$(json_field "$out" 'd["ok"]')"
+
+# an invalid task must leave plan.json byte-identical — validation runs on the
+# RESULT, and a rejected write is a no-op, not a partial one
+dir="$(new_repo)"
+before="$(shasum "$dir/.claude/state/plan.json" | cut -d' ' -f1)"
+out="$(run_plan_io "$dir" add-task --json '{"title":"no fields at all"}')"; rc=$?
+after="$(shasum "$dir/.claude/state/plan.json" | cut -d' ' -f1)"
+assert_eq "O-8 invalid task exit code" "1" "$rc"
+assert_eq "O-9 invalid task reports errors" "True" \
+  "$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(len(d['data']['errors'])>0)" "$out")"
+assert_eq "O-10 plan.json untouched after a rejected add" "$before" "$after"
+
+# an unknown dependency is rejected by the same shared validation
+dir="$(new_repo)"
+out="$(run_plan_io "$dir" add-task --json "$(printf '%s' "$VALID_TASK" | python3 -c "
+import json,sys
+t=json.load(sys.stdin); t['depends_on']=['999']; print(json.dumps(t))
+")")"
+assert_eq "O-11 unknown depends_on is refused" "False" "$(json_field "$out" 'd["ok"]')"
+
+# a file outside service_path is rejected (same boundary rule as validate)
+dir="$(new_repo)"
+out="$(run_plan_io "$dir" add-task --json "$(printf '%s' "$VALID_TASK" | python3 -c "
+import json,sys
+t=json.load(sys.stdin); t['files']=['services/other/x.py']; print(json.dumps(t))
+")")"
+assert_eq "O-12 file outside service_path is refused" "False" "$(json_field "$out" 'd["ok"]')"
+
+# malformed --json is a usage error, not a crash
+dir="$(new_repo)"
+out="$(run_plan_io "$dir" add-task --json '{not json')"; rc=$?
+assert_eq "O-13 malformed json exit code" "1" "$rc"
+assert_eq "O-14 malformed json ok:false" "False" "$(json_field "$out" 'd["ok"]')"
+
+# the added task is immediately dispatchable
+dir="$(new_repo)"
+run_plan_io "$dir" add-task --json "$VALID_TASK" >/dev/null
+mutate_plan "$dir" 'for t in plan["tasks"]:
+    if t["id"] != "004":
+        t["status"] = "done"'
+out="$(run_plan_io "$dir" next)"
+assert_eq "O-15 next picks the newly added task" "004" "$(json_field "$out" 'd["data"]["task_id"]')"
+
 exit $fail
