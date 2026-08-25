@@ -52,9 +52,11 @@ mkdir -p .claude/state/briefs .claude/state/reports .claude/state/review .claude
 FORBIDDEN_EDGE: <src-pattern> --> <dst-pattern>
 BOUNDARY_EXEMPT: <path>
 ```
-`FORBIDDEN_EDGE:` — по одной строке на явную архитектурную границу из brief'а (например «integration-сервисы stateless, без прямого доступа к БД» → `FORBIDDEN_EDGE: integration-* --> DB`). Паттерны glob-ish: `*` — wildcard, `(A|B)` проходит как regex-alternation. Не выдумывай границы, которых brief не называет — пустая секция (без строк `FORBIDDEN_EDGE:`) валиднее выдуманной.
+`FORBIDDEN_EDGE:` — строка на каждую явную границу из brief'а («integration-сервисы без прямого доступа к БД» → `FORBIDDEN_EDGE: integration-* --> DB`). Паттерны glob-ish: `*` — wildcard, `(A|B)` — regex-alternation. Не выдумывай границы, которых brief не называет: пустая секция валиднее выдуманной.
 
-`BOUNDARY_EXEMPT:` — путь workspace-shared артефакта, который меняют задачи любого boundary (пример: `uv.lock` в uv-workspace); точное совпадение, не glob. `validate-task.sh` не гейтит эти пути по boundary, `finalize.sh` стейджит их с задачей.
+`BOUNDARY_EXEMPT:` — путь workspace-shared артефакта, который меняют задачи любого boundary (`uv.lock` в uv-workspace); точное совпадение, не glob. `validate-task.sh` не гейтит его по boundary, `finalize.sh` стейджит с задачей.
+
+**Несколько деплой-юнитов на одном образе** (api/worker/beat) → впиши инвариант: у каждого smoke-тест импорта entrypoint'а **в отдельном процессе**. Тест-сьюта этот класс не ловит: она импортирует модули в своём порядке, юнит — один entrypoint в свежем интерпретаторе. На vireo так цикл импорта уронил worker/beat при зелёном pytest.
 
 **3.2. `ci-mirror.sh`** — детерминированная генерация из `## Stack` brief'а. Читай `backend`/`frontend` ТЕМ ЖЕ способом, что `_extract_stack_value` в `skills/brief/scripts/package-brief.sh` (строки ~166–188: awk по `## Stack`, `- key: value`, case-insensitive key, первое совпадение побеждает) — replicate этот awk один в один для `backend` и для `frontend`, не изобретай новый формат парсинга.
 
@@ -92,7 +94,7 @@ if [ -d services/frontend ]; then npm --prefix services/frontend run test -- --r
 ```
 ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/assemble-agent.sh <role> [stack]
 ```
-Собираются ТОЛЬКО роли из enum `role` в `skills/plan/references/plan-schema.json` — по ним `mvp:build` диспатчит агентов (`agentType`). Вызови: `backend-implementer <backend>`, `devops-engineer docker-dokploy.<backend>`, `test-writer <backend>` — всегда; `frontend-implementer <frontend>` — если `frontend != none`; `integration-specialist` — если brief явно описывает интеграции со сторонним API (сервисы `integration-*` в "## Services"). Ролей `validator`/`code-reviewer` в проекте нет: эти шаги v2 гоняет инлайн-шаблонами (`skills/build/agents/*.md`) на дефолтном агенте — собирать их не надо и не из чего. `TEMPLATES_DIR`/`OUT_DIR` не трогай — дефолты уже указывают на `${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/templates` и `.claude/agents`.
+Только роли из enum `role` в `skills/plan/references/plan-schema.json` — по ним `mvp:build` диспатчит агентов (`agentType`). Всегда: `backend-implementer <backend>`, `devops-engineer docker-dokploy.<backend>`, `test-writer <backend>`. Плюс `frontend-implementer <frontend>` при `frontend != none` и `integration-specialist`, если brief называет сервисы `integration-*`. Ролей `validator`/`code-reviewer` нет — эти шаги гоняются инлайн-шаблонами `skills/build/agents/*.md`. `TEMPLATES_DIR`/`OUT_DIR` не трогай.
 
 Затем ОБЯЗАТЕЛЬНО:
 ```
