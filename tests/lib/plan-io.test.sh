@@ -710,6 +710,31 @@ assert_eq "Q-11 epoch 2 holds the continuation" "2" "$(json_field "$out" 'd["dat
 assert_eq "Q-12 epoch 2 work is pending" "2" "$(json_field "$out" 'd["data"]["epochs"]["2"]["pending"]')"
 assert_eq "Q-13 summary reports the current epoch" "2" "$(json_field "$out" 'd["data"]["epoch"]')"
 
+# a directory in `files` is refused at write time: validate-task.sh compares
+# declared paths to changed FILE paths by exact string, so a directory can
+# never match and the task reports missing-declared forever (vireo epoch 2)
+dir="$(new_repo)"
+mkdir -p "$dir/services/api/app"
+out="$(run_plan_io "$dir" add-task --json "$(printf '%s' "$VALID_TASK" | python3 -c "
+import json,sys
+t=json.load(sys.stdin); t['files']=['services/api/app']; print(json.dumps(t))
+")")"
+assert_eq "Q-16 existing directory in files refused" "False" "$(json_field "$out" 'd["ok"]')"
+assert_contains "Q-17 refusal names the directory" "$(json_field "$out" 'd["reason"]')" "is a directory"
+
+# a trailing slash is a directory even when the path does not exist yet
+dir="$(new_repo)"
+out="$(run_plan_io "$dir" add-task --json "$(printf '%s' "$VALID_TASK" | python3 -c "
+import json,sys
+t=json.load(sys.stdin); t['files']=['services/api/tests/']; print(json.dumps(t))
+")")"
+assert_eq "Q-18 trailing-slash path refused" "False" "$(json_field "$out" 'd["ok"]')"
+
+# a not-yet-created file is the normal case and must still pass
+dir="$(new_repo)"
+out="$(run_plan_io "$dir" add-task --json "$VALID_TASK")"
+assert_eq "Q-19 absent file path still accepted" "True" "$(json_field "$out" 'd["ok"]')"
+
 # a plan that never reopened still reports epoch 1 (backward compatibility)
 dir="$(new_repo)"
 out="$(run_plan_io "$dir" summary)"
