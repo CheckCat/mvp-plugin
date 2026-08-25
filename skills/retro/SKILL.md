@@ -19,9 +19,9 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh get phase
 
 ## Шаг 2 — телеметрия
 
-Прочитай `.claude/state/telemetry/events.jsonl`. Тип один — `task_complete`: `{"event","task","delta_tokens","controller_only","dispatches","ts"}` (два средних поля с 2026-08-25, раньше `null`). Собери по `task`: сумму, min/max/avg.
+Прочитай `.claude/state/telemetry/events.jsonl`. Тип один — `task_complete`: `{"event","task","delta_tokens","controller_only","dispatches","ts"}` (два средних поля с 2026-08-25, раньше `null`). Собери сумму, min/max/avg.
 
-**Ни одно поле тут не стоимость.** `delta_tokens` — `budget.spent()` глазами контроллера, субагентов не видит (на vireo занизил в **8.4×**). `dispatches` — тоже не прокси: замер на 19 задачах дал корреляцию +0.28 с токенами и −0.04 с деньгами. Это **форма прогона**: 5 — чистый путь, 8 — лестница валидации. В $ не переводи.
+**Ни одно поле тут не стоимость.** `delta_tokens` — взгляд контроллера, субагентов не видит (на vireo занизил в **8.4×**). `dispatches` — тоже не прокси (корреляция −0.04 с деньгами), а **форма прогона**: 5 — чистый путь, 8 — лестница валидации. В $ не переводи.
 
 ## Шаг 3 — вербатим-наблюдения
 
@@ -33,7 +33,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh get phase
 
 ## Шаг 4 — observation-файл
 
-Путь: `${CLAUDE_PLUGIN_ROOT}/docs/observations/<date>-<project>.md`, `date`=`date -u +%Y-%m-%d`, `project`=`basename "$PWD"`. `mkdir -p`, пиши через `Write`:
+Путь: **`.claude/state/retro-<date>.md` в ПРОЕКТЕ** (`date -u +%Y-%m-%d`). НЕ в `${CLAUDE_PLUGIN_ROOT}` — это кэш установки, его стирает переустановка плагина, отчёт пропал бы молча. Пиши через `Write`:
 
 ```markdown
 # Observations: <project> — <date>
@@ -53,7 +53,7 @@ done/failed (plan-io.mjs summary), сумма delta_tokens и dispatches
 
 ## Шаг 5 — что дальше руками
 
-Ничего из Шага 3/4 не применяется автоматически: правки `skills/*`/`templates/*` — отдельный коммит в репо плагина. Если `${CLAUDE_PLUGIN_ROOT}` read-only — файл всё равно пиши, оператор перенесёт.
+Ничего из Шага 3/4 не применяется автоматически: правки `skills/*`/`templates/*` — отдельный коммит в **репо плагина** (не в кэше). Скажи оператору путь отчёта и что кандидаты переносятся руками.
 
 ## Rationalization table
 
@@ -64,4 +64,4 @@ done/failed (plan-io.mjs summary), сумма delta_tokens и dispatches
 
 ## HARD-GATE
 
-Покажи: путь observation-файла, сводку телеметрии, число вербатим-кандидатов. Терминальный скилл — **NEXT отсутствует**. Скажи: «pipeline complete».
+Покажи: путь отчёта, сводку телеметрии, число кандидатов. Терминальный скилл — **NEXT отсутствует**. Скажи: «pipeline complete».
