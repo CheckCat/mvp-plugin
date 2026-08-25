@@ -227,7 +227,7 @@
 //     scratch paths are typically gitignored; the dry-run fixture
 //     (tests/fixtures/dryrun/make-dryrun.sh) does NOT add a .gitignore, so
 //     once a real run starts writing `.claude/state/briefs/`, `reports/`,
-//     `review/`, `patches-*.json`, `commit-msg-*.txt`, etc., those will show
+//     `review/`, `patches/`, `commit-msgs/`, etc., those will show
 //     up as "untracked" noise in later tasks' review packages alongside the
 //     actual new file(s) a task creates. Deliberately left the fixture as-is
 //     rather than adding a `.gitignore`: the fixture's job is to exercise
@@ -956,7 +956,7 @@ function parseReReview(text) {
 // re-validates and lets that be the judge; review path parks directly on a
 // failed apply — fix round item 6).
 async function applyPatchesFlow(id, patches, phaseTitle) {
-  const patchesPath = `.claude/state/patches-${id}.json`;
+  const patchesPath = `.claude/state/patches/patches-${id}.json`;
   dispatchCount += 1;
   await agent(
     `${cwdPrefixLine()}Write EXACTLY this JSON to ${patchesPath} using the Write tool (create the file, overwrite any existing content, no extra text, no markdown code fences):\n${JSON.stringify(patches)}`,
@@ -1282,7 +1282,13 @@ function shQuote(s) {
 // The chain's LAST json line is now the ledger envelope, so the commit sha
 // is read from there (plan-io echoes it back for exactly this reason).
 async function finalize(id, boundary, tokensDelta, dispatches, concerns, phaseTitle) {
-  const msgPath = `.claude/state/commit-msg-${id}.txt`;
+  // Per-task scratch artifacts get their own directory, like briefs/, reports/
+  // and review/: a 55-task run otherwise buries plan.json, ledger.md and
+  // invariants.md under 55 commit-msg-*.txt files in the same listing.
+  // plan-io's writeTextAtomic mkdir -p's the parent, so no setup step is
+  // needed, and finalize.sh stages `.claude/state` wholesale — the nested path
+  // is committed exactly as the flat one was.
+  const msgPath = `.claude/state/commit-msgs/commit-msg-${id}.txt`;
   const concernText = (concerns || []).filter(Boolean).join('\n');
   const concernArg = concernText ? ` --concern ${shQuote(concernText)}` : '';
 
