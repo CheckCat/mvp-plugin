@@ -9,11 +9,11 @@
 #
 # Scope presets (paths staged + committed):
 #   brief      = docs/product docs/product/_raw
-#   clarify    = docs/product .claude/state/state.json
-#   bootstrap  = CLAUDE.md docs/architecture.md .claude/agents .claude/state
-#   plan       = .claude/state docs/plan.md
-#   build-task = --files (REQUIRED) + .claude/state (always appended) +
-#                BOUNDARY_EXEMPT paths from .claude/state/invariants.md, if
+#   clarify    = docs/product .mvp/state.json
+#   bootstrap  = CLAUDE.md docs/architecture.md .claude/agents .mvp
+#   plan       = .mvp docs/plan.md
+#   build-task = --files (REQUIRED) + .mvp (always appended) +
+#                BOUNDARY_EXEMPT paths from .mvp/invariants.md, if
 #                any (always appended — workspace-shared artifacts a
 #                --boundary task legitimately touched, e.g. a uv-workspace
 #                root uv.lock; see lib/validate-task.sh header for the spec)
@@ -97,10 +97,10 @@ fi
 PATHS=()
 case "$SCOPE" in
   brief) PATHS=(docs/product docs/product/_raw) ;;
-  clarify) PATHS=(docs/product .claude/state/state.json) ;;
-  bootstrap) PATHS=(CLAUDE.md docs/architecture.md .claude/agents .claude/state) ;;
-  plan) PATHS=(.claude/state docs/plan.md) ;;
-  build-task) PATHS=("${FILES_ARG[@]}" .claude/state) ;;
+  clarify) PATHS=(docs/product .mvp/state.json) ;;
+  bootstrap) PATHS=(CLAUDE.md docs/architecture.md .claude/agents .mvp) ;;
+  plan) PATHS=(.mvp docs/plan.md) ;;
+  build-task) PATHS=("${FILES_ARG[@]}" .mvp) ;;
 esac
 
 # non-build-task scopes: --files EXTENDS the preset (see header comment).
@@ -109,17 +109,17 @@ if [[ "$SCOPE" != "build-task" && ${#FILES_ARG[@]} -gt 0 ]]; then
 fi
 
 # build-task only: append project-declared BOUNDARY_EXEMPT paths from
-# .claude/state/invariants.md (same class of workspace-shared artifact as a
+# .mvp/invariants.md (same class of workspace-shared artifact as a
 # uv-workspace root uv.lock — see lib/validate-task.sh header for the full
 # rationale/format spec: one exact relative path per line, no globs). These
 # are staged WITH the task so the boundary exemption in validate-task.sh and
 # the commit stay consistent — the existing "exists on disk OR tracked"
 # filter below silently skips exempt paths that didn't actually change,
 # exactly like every other preset path.
-if [[ "$SCOPE" == "build-task" && -f ".claude/state/invariants.md" ]]; then
+if [[ "$SCOPE" == "build-task" && -f ".mvp/invariants.md" ]]; then
   while IFS= read -r exempt_path; do
     [[ -n "$exempt_path" ]] && PATHS+=("$exempt_path")
-  done < <(grep -E '^BOUNDARY_EXEMPT:[[:space:]]*' ".claude/state/invariants.md" \
+  done < <(grep -E '^BOUNDARY_EXEMPT:[[:space:]]*' ".mvp/invariants.md" \
     | sed -E 's/^BOUNDARY_EXEMPT:[[:space:]]*//; s/[[:space:]]*$//')
 fi
 

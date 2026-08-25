@@ -73,7 +73,7 @@ ${CLAUDE_PLUGIN_ROOT}/skills/brief/scripts/package-brief.sh archive <src>...
 ${CLAUDE_PLUGIN_ROOT}/lib/state.sh init
 ${CLAUDE_PLUGIN_ROOT}/lib/state.sh set phase brief-done
 ```
-`init` обязательно ПЕРЕД `set` (идемпотентен, безопасно вызывать всегда). `.claude/state/` создаётся только здесь — раньше гейт из шага 1 упал бы, если бы она уже существовала.
+`init` обязательно ПЕРЕД `set` (идемпотентен, безопасно вызывать всегда). `.mvp/` создаётся только здесь — раньше гейт из шага 1 упал бы, если бы она уже существовала.
 
 ## Шаг 8 — finalize
 

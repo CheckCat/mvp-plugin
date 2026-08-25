@@ -10,7 +10,7 @@
 #
 # Steps (always run all three, regardless of earlier failures, so a single
 # call reports everything wrong with the task at once):
-#   1. ci      — execute .claude/state/ci-mirror.sh (a plain list of
+#   1. ci      — execute .mvp/ci-mirror.sh (a plain list of
 #                commands, run via `bash -e` so the FIRST failing command
 #                aborts the rest, giving deterministic "first failure"
 #                semantics even if the mirror script itself has no `set -e`).
@@ -19,13 +19,13 @@
 #                `git diff --name-only HEAD`, `git diff --name-only --cached`,
 #                and untracked files via `git ls-files --others
 #                --exclude-standard`) must resolve under --boundary, under
-#                .claude/state, or be a project-declared BOUNDARY_EXEMPT path
+#                .mvp, or be a project-declared BOUNDARY_EXEMPT path
 #                (see below). Path containment is computed with Python's
 #                os.path.relpath (not bash string-prefix matching) to avoid
 #                the "app/../secret.py passes a naive `startswith('app/')`
 #                check" class of bug (see task-7 report I-3 fix for the
 #                precedent this follows).
-#   3. declared — same changed-file set, minus anything under .claude/state
+#   3. declared — same changed-file set, minus anything under .mvp
 #                or BOUNDARY_EXEMPT, compared against --files. ONE direction
 #                only: a declared file the task never produced ->
 #                missing-declared. Files the task created without the plan
@@ -48,10 +48,10 @@
 #
 # BOUNDARY_EXEMPT (workspace-shared artifacts, e.g. a uv-workspace root
 # uv.lock that a --boundary task legitimately regenerates): lines matching
-# `^BOUNDARY_EXEMPT: <path>` in .claude/state/invariants.md, one exact
+# `^BOUNDARY_EXEMPT: <path>` in .mvp/invariants.md, one exact
 # relative path per line (globs are NOT supported — exact string match only).
 # Missing invariants.md -> no exemptions, current behavior. Exempt paths are
-# treated exactly like .claude/state in both the boundary and declared
+# treated exactly like .mvp in both the boundary and declared
 # checks (allowed outside boundary, not required to be declared — they are
 # shared noise, not this task's business).
 #
@@ -125,12 +125,12 @@ fi
 
 # --- step 1: ci-mirror.sh -----------------------------------------------------
 
-CI_MIRROR=".claude/state/ci-mirror.sh"
+CI_MIRROR=".mvp/ci-mirror.sh"
 CI_VIOLATION=0
 CI_DETAIL=""
 if [ ! -f "$CI_MIRROR" ]; then
   CI_VIOLATION=1
-  CI_DETAIL="missing .claude/state/ci-mirror.sh"
+  CI_DETAIL="missing .mvp/ci-mirror.sh"
 else
   CI_OUT="$(bash -e "$CI_MIRROR" 2>&1)"
   CI_RC=$?
@@ -148,7 +148,7 @@ fi
 # into the python source text.
 
 EXEMPT_CSV=""
-INVARIANTS=".claude/state/invariants.md"
+INVARIANTS=".mvp/invariants.md"
 if [ -f "$INVARIANTS" ]; then
   EXEMPT_CSV="$(grep -E '^BOUNDARY_EXEMPT:[[:space:]]*' "$INVARIANTS" \
     | sed -E 's/^BOUNDARY_EXEMPT:[[:space:]]*//; s/[[:space:]]*$//' \
@@ -200,10 +200,10 @@ if os.environ.get("CI_VIOLATION") == "1":
     violations.append({"check": "ci", "detail": os.environ.get("CI_DETAIL", "")})
 
 for f in seen:
-    if not (under(f, boundary) or under(f, ".claude/state") or f in exempt):
+    if not (under(f, boundary) or under(f, ".mvp") or f in exempt):
         violations.append({"check": "boundary", "detail": f})
 
-actual_excl_state = {f for f in seen if not under(f, ".claude/state") and f not in exempt}
+actual_excl_state = {f for f in seen if not under(f, ".mvp") and f not in exempt}
 
 # One direction only (see the header): a file the plan promised and the task
 # did not produce. The reverse — files created but not listed — is normal and

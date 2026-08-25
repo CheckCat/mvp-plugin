@@ -33,7 +33,7 @@ for v in d["data"]["violations"]:
 ' "$1" "$2" 2>/dev/null
 }
 
-# Every fixture gets a VALID .claude/state/ci-mirror.sh by default — it is a
+# Every fixture gets a VALID .mvp/ci-mirror.sh by default — it is a
 # check-meta gate now (a real bootstrap always has one by Step 3.2), so the
 # cases that are about CLAUDE.md/docs/architecture.md must not trip over it.
 # check-meta.sh now EXECUTES this mirror (not just `bash -n`), so the default
@@ -46,8 +46,8 @@ for v in d["data"]["violations"]:
 new_project_dir() {
   local d
   d="$(mktemp -d -p "$tmproot")"
-  mkdir -p "$d/.claude/state"
-  printf 'if [ -f pyproject.toml ]; then uv run ruff check .; fi\nif [ -f pyproject.toml ]; then uv run pytest; fi\n' >"$d/.claude/state/ci-mirror.sh"
+  mkdir -p "$d/.mvp"
+  printf 'if [ -f pyproject.toml ]; then uv run ruff check .; fi\nif [ -f pyproject.toml ]; then uv run pytest; fi\n' >"$d/.mvp/ci-mirror.sh"
   printf '%s' "$d"
 }
 
@@ -156,8 +156,8 @@ fi
 
 d_d="$(new_project_dir)"
 write_valid_claude_md "$d_d"
-mkdir -p "$d_d/.claude/state"
-cat >"$d_d/.claude/state/invariants.md" <<'EOF'
+mkdir -p "$d_d/.mvp"
+cat >"$d_d/.mvp/invariants.md" <<'EOF'
 # Invariants
 
 FORBIDDEN_EDGE: integration-* --> DB
@@ -186,8 +186,8 @@ fi
 
 d_e="$(new_project_dir)"
 write_valid_claude_md "$d_e"
-mkdir -p "$d_e/.claude/state"
-cat >"$d_e/.claude/state/invariants.md" <<'EOF'
+mkdir -p "$d_e/.mvp"
+cat >"$d_e/.mvp/invariants.md" <<'EOF'
 FORBIDDEN_EDGE: integration-* --> DB
 EOF
 mkdir -p "$d_e/docs"; cat >"$d_e/docs/architecture.md" <<'EOF'
@@ -210,8 +210,8 @@ assert_eq "(e) ok:true" "True" "$(json_field "$CM_OUT" 'd["ok"]')"
 
 d_e2="$(new_project_dir)"
 write_valid_claude_md "$d_e2"
-mkdir -p "$d_e2/.claude/state"
-cat >"$d_e2/.claude/state/invariants.md" <<'EOF'
+mkdir -p "$d_e2/.mvp"
+cat >"$d_e2/.mvp/invariants.md" <<'EOF'
 FORBIDDEN_EDGE: integration-* --> DB
 EOF
 mkdir -p "$d_e2/docs"; cat >"$d_e2/docs/architecture.md" <<'EOF'
@@ -266,7 +266,7 @@ fi
 d_h="$(new_project_dir)"
 write_valid_claude_md "$d_h"
 write_valid_architecture_md "$d_h"
-rm "$d_h/.claude/state/ci-mirror.sh"
+rm "$d_h/.mvp/ci-mirror.sh"
 
 run_cm "$d_h"
 
@@ -282,7 +282,7 @@ fi
 d_h2="$(new_project_dir)"
 write_valid_claude_md "$d_h2"
 write_valid_architecture_md "$d_h2"
-printf '# TODO: fill in the CI commands\n\n' >"$d_h2/.claude/state/ci-mirror.sh"
+printf '# TODO: fill in the CI commands\n\n' >"$d_h2/.mvp/ci-mirror.sh"
 
 run_cm "$d_h2"
 
@@ -298,7 +298,7 @@ fi
 d_i="$(new_project_dir)"
 write_valid_claude_md "$d_i"
 write_valid_architecture_md "$d_i"
-printf 'if uv run pytest\nuv run ruff check .\n' >"$d_i/.claude/state/ci-mirror.sh"
+printf 'if uv run pytest\nuv run ruff check .\n' >"$d_i/.mvp/ci-mirror.sh"
 
 run_cm "$d_i"
 
@@ -317,7 +317,7 @@ fi
 d_j="$(new_project_dir)"
 write_valid_claude_md "$d_j"
 write_valid_architecture_md "$d_j"
-printf 'ls no-such-dir\n' >"$d_j/.claude/state/ci-mirror.sh"
+printf 'ls no-such-dir\n' >"$d_j/.mvp/ci-mirror.sh"
 
 run_cm "$d_j"
 
@@ -337,7 +337,7 @@ fi
 d_k="$(new_project_dir)"
 write_valid_claude_md "$d_k"
 write_valid_architecture_md "$d_k"
-printf 'if [ -d no-such-dir ]; then ls no-such-dir; fi\nif [ -f pyproject.toml ]; then uv run pytest; fi\n' >"$d_k/.claude/state/ci-mirror.sh"
+printf 'if [ -d no-such-dir ]; then ls no-such-dir; fi\nif [ -f pyproject.toml ]; then uv run pytest; fi\n' >"$d_k/.mvp/ci-mirror.sh"
 
 run_cm "$d_k"
 

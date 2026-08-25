@@ -141,7 +141,7 @@ gate_brief() {
   fi
 
   local reason=""
-  if [ -z "$reason" ] && [ -d .claude/state ]; then reason=".claude/state/ already exists"; fi
+  if [ -z "$reason" ] && [ -d .mvp ]; then reason=".mvp/ already exists"; fi
   if [ -z "$reason" ] && [ -f CLAUDE.md ]; then reason="CLAUDE.md already exists"; fi
   if [ -z "$reason" ] && [ -f ARCHITECTURE.md ]; then reason="ARCHITECTURE.md already exists"; fi
   if [ -z "$reason" ] && is_root_manifest_present; then
@@ -219,7 +219,7 @@ gate_plan() {
       "run git init (or rerun mvp:brief git step) — plan/build phases require git" ""
     exit 1
   fi
-  local planfile=".claude/state/plan.json"
+  local planfile=".mvp/plan.json"
   if [ -f "$planfile" ]; then
     local status
     status="$(git status --porcelain -- "$planfile" 2>/dev/null)"
@@ -251,7 +251,7 @@ gate_build() {
       "run git init (or rerun mvp:brief git step) — plan/build phases require git" ""
     exit 1
   fi
-  local planfile=".claude/state/plan.json"
+  local planfile=".mvp/plan.json"
   local reason=""
   if [ ! -f "$planfile" ]; then
     reason="plan.json missing"

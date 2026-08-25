@@ -33,15 +33,15 @@ json_field() { # <json> <python-expr-on-d>
 }
 
 # new_repo_with_plan <raw-json-content> -> path to a fresh tmp-git project
-# with .claude/state/plan.json set to the given raw content (uncommitted is
+# with .mvp/plan.json set to the given raw content (uncommitted is
 # fine — validate-plan.py only reads).
 new_repo_with_plan() {
   local content="$1"
   local dir
   dir="$(mktemp -d -p "$tmproot")"
   ( cd "$dir" && git init -q && git config user.email test@test.local && git config user.name test )
-  mkdir -p "$dir/.claude/state"
-  printf '%s' "$content" > "$dir/.claude/state/plan.json"
+  mkdir -p "$dir/.mvp"
+  printf '%s' "$content" > "$dir/.mvp/plan.json"
   echo "$dir"
 }
 
@@ -56,8 +56,8 @@ run_validate_plan() { # <dir> [args...]
 
 dir="$(mktemp -d -p "$tmproot")"
 ( cd "$dir" && git init -q && git config user.email test@test.local && git config user.name test )
-mkdir -p "$dir/.claude/state"
-cp "$fixture" "$dir/.claude/state/plan.json"
+mkdir -p "$dir/.mvp"
+cp "$fixture" "$dir/.mvp/plan.json"
 
 out="$(run_validate_plan "$dir")"; rc=$?
 assert_eq "valid fixture: exit code" "0" "$rc"
@@ -228,8 +228,8 @@ assert_eq "argv guard: ok" "False" "$(json_field "$out" 'd["ok"]')"
 
 dir="$(mktemp -d -p "$tmproot")"
 ( cd "$dir" && git init -q && git config user.email test@test.local && git config user.name test )
-mkdir -p "$dir/.claude/state"
-cp "$fixture" "$dir/.claude/state/plan.json"
+mkdir -p "$dir/.mvp"
+cp "$fixture" "$dir/.mvp/plan.json"
 out="$(run_validate_plan "$dir")"
 nlines="$(printf '%s\n' "$out" | wc -l | tr -d ' ')"
 assert_eq "single-line JSON contract" "1" "$nlines"

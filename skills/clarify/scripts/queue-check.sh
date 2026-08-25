@@ -101,7 +101,7 @@ state_set() { # <key> <value>
   local out
   if ! out="$("$state_sh" set "$1" "$2" 2>&1)"; then
     fail "state.sh set $1 failed: $(printf '%s' "$out" | tail -n 1 | head -c 300)" \
-      "run lib/state.sh init in the project root (and check .claude/state is writable), then rerun queue-check.sh"
+      "run lib/state.sh init in the project root (and check .mvp is writable), then rerun queue-check.sh"
   fi
 }
 

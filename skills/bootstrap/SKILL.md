@@ -7,7 +7,7 @@ description: Use after mvp:clarify to generate project meta-files, agents and st
 
 **Announce at start:** «Using mvp:bootstrap to generate project meta-files, agents and state».
 
-**Iron Law: Уроки прогонов попадают в invariants.md проекта, не в плагин.** v1 позволил специфике проекта прорасти в глобальные `~/.claude/agents/templates/` — следующий проект унаследовал чужие допущения молча. Канал для проектных инвариантов — `.claude/state/invariants.md`, коммитится вместе с bootstrap. Шаблоны в `${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/templates/` — stack-специфичные, не project-специфичные: тянет дописать конкретику проекта — это Stop&Ask, не шаблон.
+**Iron Law: Уроки прогонов попадают в invariants.md проекта, не в плагин.** v1 позволил специфике проекта прорасти в глобальные `~/.claude/agents/templates/` — следующий проект унаследовал чужие допущения молча. Канал для проектных инвариантов — `.mvp/invariants.md`, коммитится вместе с bootstrap. Шаблоны в `${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/templates/` — stack-специфичные, не project-специфичные: тянет дописать конкретику проекта — это Stop&Ask, не шаблон.
 
 Каждый результат скрипта — последняя строка stdout, JSON `{"ok","reason","hint","data"}`. При `ok:false` — почини по `hint` и повтори, либо Stop&Ask. `state.json` руками не редактируется — только через `state.sh`.
 
@@ -31,9 +31,9 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh get auto_closed_critical
 
 ```
 ${CLAUDE_PLUGIN_ROOT}/lib/state.sh init
-mkdir -p .claude/state/briefs .claude/state/reports .claude/state/review .claude/state/telemetry
+mkdir -p .mvp/briefs .mvp/reports .mvp/review .mvp/telemetry
 ```
-`init` идемпотентен — `.claude/state/state.json` уже существует с прошлых фаз (brief/clarify), это ожидаемо, не ошибка.
+`init` идемпотентен — `.mvp/state.json` уже существует с прошлых фаз (brief/clarify), это ожидаемо, не ошибка.
 
 ## Шаг 3 — invariants.md + ci-mirror.sh
 
@@ -60,7 +60,7 @@ BOUNDARY_EXEMPT: <path>
 
 **3.2. `ci-mirror.sh`** — детерминированная генерация из `## Stack` brief'а. Читай `backend`/`frontend` ТЕМ ЖЕ способом, что `_extract_stack_value` в `skills/brief/scripts/package-brief.sh` (строки ~166–188: awk по `## Stack`, `- key: value`, case-insensitive key, первое совпадение побеждает) — replicate этот awk один в один для `backend` и для `frontend`, не изобретай новый формат парсинга.
 
-Маппинг стек → команды (пишутся в `.claude/state/ci-mirror.sh`, по одной команде на строку — `validate-task.sh` гоняет их через `bash -e`, первая ошибка обрывает остальные). Каждая команда guarded своим предусловием: на пустом дереве зеркало обязано выходить 0 — это исполняемый гейт check-meta (Шаг 6 реально запускает `ci-mirror.sh`, не только `bash -n`).
+Маппинг стек → команды (пишутся в `.mvp/ci-mirror.sh`, по одной команде на строку — `validate-task.sh` гоняет их через `bash -e`, первая ошибка обрывает остальные). Каждая команда guarded своим предусловием: на пустом дереве зеркало обязано выходить 0 — это исполняемый гейт check-meta (Шаг 6 реально запускает `ci-mirror.sh`, не только `bash -n`).
 
 `backend=fastapi`:
 ```
@@ -106,14 +106,14 @@ ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/verify-agents-drift.sh
 
 Пиши сам через `Write`, по образцу этого же файла плагина (`CLAUDE.md` репозитория — секции `## Стек`, `## Команды`, `## Правила...`). Обязательно:
 - `CLAUDE.md` ≤ 150 строк, содержит `## Стек`, `## Команды` (= содержимое `ci-mirror.sh` человеко-читаемо), `## Правила` (project-specific, не общие банальности).
-- `docs/architecture.md` — mermaid-диаграмма сервисов из brief'а; рёбра НЕ должны совпадать ни с одним `FORBIDDEN_EDGE:` из `.claude/state/invariants.md`, который ты сам написал на Шаге 3 — сверься перед записью, не полагайся только на Шаг 6.
+- `docs/architecture.md` — mermaid-диаграмма сервисов из brief'а; рёбра НЕ должны совпадать ни с одним `FORBIDDEN_EDGE:` из `.mvp/invariants.md`, который ты сам написал на Шаге 3 — сверься перед записью, не полагайся только на Шаг 6.
 
 ## Шаг 6 — check-meta (max 2 попытки)
 
 ```
 ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/check-meta.sh
 ```
-Три гейта: `CLAUDE.md` (есть, ≤150 строк, обязательные секции), `docs/architecture.md` (есть, ни одно ребро не нарушает `FORBIDDEN_EDGE`), `.claude/state/ci-mirror.sh` (есть, непустой, проходит `bash -n` И реально выполняется — `bash -e`, exit 0 на текущем дереве). `ok:false` → почини файл по `data.violations`, повтори. Нарушение `ci-mirror-*` — возврат к Шагу 3.2, а не к правке `CLAUDE.md`: этот файл дальше гоняет `validate-task.sh` на каждой задаче build'а. После 2 неудачных попыток подряд — Stop&Ask, не третья попытка молча.
+Три гейта: `CLAUDE.md` (есть, ≤150 строк, обязательные секции), `docs/architecture.md` (есть, ни одно ребро не нарушает `FORBIDDEN_EDGE`), `.mvp/ci-mirror.sh` (есть, непустой, проходит `bash -n` И реально выполняется — `bash -e`, exit 0 на текущем дереве). `ok:false` → почини файл по `data.violations`, повтори. Нарушение `ci-mirror-*` — возврат к Шагу 3.2, а не к правке `CLAUDE.md`: этот файл дальше гоняет `validate-task.sh` на каждой задаче build'а. После 2 неудачных попыток подряд — Stop&Ask, не третья попытка молча.
 
 ## Шаг 7 — phase + finalize
 
@@ -121,13 +121,13 @@ ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/check-meta.sh
 ${CLAUDE_PLUGIN_ROOT}/lib/state.sh set phase bootstrap-done
 ${CLAUDE_PLUGIN_ROOT}/lib/finalize.sh bootstrap <msg-file>
 ```
-`<msg-file>` первой строкой: `chore: bootstrap project meta`. Коммитит `CLAUDE.md docs/architecture.md .claude/agents .claude/state` (пресет scope `bootstrap` в `finalize.sh`).
+`<msg-file>` первой строкой: `chore: bootstrap project meta`. Коммитит `CLAUDE.md docs/architecture.md .claude/agents .mvp` (пресет scope `bootstrap` в `finalize.sh`).
 
 ## Rationalization table
 
 | Соблазн | Почему нет |
 |---|---|
-| «Допишу совет конкретного проекта прямо в шаблон, он же полезный» | это ровно то, что сломало v1 — совет живёт в `.claude/state/invariants.md` этого проекта, не в `${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/templates/` |
+| «Допишу совет конкретного проекта прямо в шаблон, он же полезный» | это ровно то, что сломало v1 — совет живёт в `.mvp/invariants.md` этого проекта, не в `${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/templates/` |
 | «pending_critical>0, но я уверен что не критично — пропущу гейт» | gate.sh не принимает override; единственный легитимный путь — вернуться в mvp:clarify |
 | «invariants.md пустой, допишу пару FORBIDDEN_EDGE на всякий случай» | не выдуманные границы — только те, что brief называет явно; пустая секция закрывает clarify, не bootstrap |
 
@@ -136,7 +136,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/finalize.sh bootstrap <msg-file>
 Прежде чем объявить шаг завершённым, покажи оператору:
 - содержимое `CLAUDE.md` и `docs/architecture.md` целиком;
 - список собранных агентов (`.claude/agents/*.md`) и `verify-agents-drift.sh` результат;
-- `.claude/state/invariants.md` — особенно секцию `Forbidden edges`.
+- `.mvp/invariants.md` — особенно секцию `Forbidden edges`.
 
 Дождись подтверждения. Затем:
 

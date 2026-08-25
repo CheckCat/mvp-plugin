@@ -41,14 +41,14 @@ json_field() { # <json> <python-expr-on-d>
 }
 
 # new_repo -> path to a fresh tmp-git project with the 3-task fixture seeded
-# and committed at .claude/state/plan.json (clean tree baseline).
+# and committed at .mvp/plan.json (clean tree baseline).
 new_repo() {
   local dir
   dir="$(mktemp -d -p "$tmproot")"
   ( cd "$dir" && git init -q && git config user.email test@test.local && git config user.name test )
-  mkdir -p "$dir/.claude/state"
-  cp "$fixture" "$dir/.claude/state/plan.json"
-  ( cd "$dir" && git add .claude/state/plan.json && git commit -q -m "chore: seed plan" )
+  mkdir -p "$dir/.mvp"
+  cp "$fixture" "$dir/.mvp/plan.json"
+  ( cd "$dir" && git add .mvp/plan.json && git commit -q -m "chore: seed plan" )
   echo "$dir"
 }
 
@@ -58,10 +58,10 @@ run_plan_io() {
   ( cd "$dir" && node "$plan_io" "$@" )
 }
 
-# mutate_plan <dir> <python-stmt-on-plan> — loads/rewrites .claude/state/plan.json
+# mutate_plan <dir> <python-stmt-on-plan> — loads/rewrites .mvp/plan.json
 mutate_plan() {
   local dir="$1" stmt="$2"
-  python3 - "$dir/.claude/state/plan.json" "$stmt" <<'PY'
+  python3 - "$dir/.mvp/plan.json" "$stmt" <<'PY'
 import json, sys
 path, stmt = sys.argv[1], sys.argv[2]
 with open(path) as f:
@@ -79,9 +79,9 @@ new_repo_with_plan() {
   local dir
   dir="$(mktemp -d -p "$tmproot")"
   ( cd "$dir" && git init -q && git config user.email test@test.local && git config user.name test )
-  mkdir -p "$dir/.claude/state"
-  printf '%s' "$content" > "$dir/.claude/state/plan.json"
-  ( cd "$dir" && git add .claude/state/plan.json && git commit -q -m "chore: seed plan" )
+  mkdir -p "$dir/.mvp"
+  printf '%s' "$content" > "$dir/.mvp/plan.json"
+  ( cd "$dir" && git add .mvp/plan.json && git commit -q -m "chore: seed plan" )
   echo "$dir"
 }
 
@@ -159,8 +159,8 @@ assert_contains "next fresh: brief boundary is service_path verbatim" "$brief_co
 # (c) after set-status + report -> next gives task-002, brief has task-001's report
 # ---------------------------------------------------------------------------
 
-mkdir -p "$dir/.claude/state/reports"
-echo "Interface: GET /health returns 200" > "$dir/.claude/state/reports/task-001.md"
+mkdir -p "$dir/.mvp/reports"
+echo "Interface: GET /health returns 200" > "$dir/.mvp/reports/task-001.md"
 out="$(run_plan_io "$dir" set-status 001 done)"; rc=$?
 assert_eq "set-status 001 done: exit code" "0" "$rc"
 assert_eq "set-status 001 done: ok" "True" "$(json_field "$out" 'd["ok"]')"
@@ -177,14 +177,14 @@ assert_contains "next after 001 done: brief contains dep report text" "$brief_co
 # ---------------------------------------------------------------------------
 
 dir="$(new_repo)"
-echo "operator paused the run" > "$dir/.claude/state/user-interrupt.md"
+echo "operator paused the run" > "$dir/.mvp/user-interrupt.md"
 out="$(run_plan_io "$dir" next)"; rc=$?
 assert_eq "next interrupt: exit code" "0" "$rc"
 assert_eq "next interrupt: ok" "True" "$(json_field "$out" 'd["ok"]')"
 assert_eq "next interrupt: halt" "interrupt" "$(json_field "$out" 'd["data"]["halt"]')"
 
 # ---------------------------------------------------------------------------
-# (e) dirty file outside .claude/state -> halt dirty-tree
+# (e) dirty file outside .mvp -> halt dirty-tree
 # ---------------------------------------------------------------------------
 
 dir="$(new_repo)"
@@ -221,12 +221,12 @@ out="$(run_plan_io "$dir" complete 001 --tokens 4200)"; rc=$?
 assert_eq "complete: exit code" "0" "$rc"
 assert_eq "complete: ok" "True" "$(json_field "$out" 'd["ok"]')"
 
-plan_status="$(python3 -c 'import json; d=json.load(open("'"$dir"'/.claude/state/plan.json")); print([t for t in d["tasks"] if t["id"]=="001"][0]["status"])')"
+plan_status="$(python3 -c 'import json; d=json.load(open("'"$dir"'/.mvp/plan.json")); print([t for t in d["tasks"] if t["id"]=="001"][0]["status"])')"
 assert_eq "complete: task status done in plan.json" "done" "$plan_status"
-plan_tokens="$(python3 -c 'import json; d=json.load(open("'"$dir"'/.claude/state/plan.json")); print([t for t in d["tasks"] if t["id"]=="001"][0]["actual_tokens"])')"
+plan_tokens="$(python3 -c 'import json; d=json.load(open("'"$dir"'/.mvp/plan.json")); print([t for t in d["tasks"] if t["id"]=="001"][0]["actual_tokens"])')"
 assert_eq "complete: actual_tokens stored" "4200" "$plan_tokens"
 
-events_file="$dir/.claude/state/telemetry/events.jsonl"
+events_file="$dir/.mvp/telemetry/events.jsonl"
 assert_true "complete: events.jsonl exists" "$([ -f "$events_file" ] && echo true || echo false)"
 last_event="$(tail -n1 "$events_file")"
 assert_eq "complete: event type" "task_complete" "$(json_field "$last_event" 'd["event"]')"
@@ -242,7 +242,7 @@ fi
 # OVERWRITE actual_tokens, not add to it, and telemetry keeps two per-call
 # entries (not a running total).
 run_plan_io "$dir" complete 001 --tokens 500 >/dev/null
-plan_tokens2="$(python3 -c 'import json; d=json.load(open("'"$dir"'/.claude/state/plan.json")); print([t for t in d["tasks"] if t["id"]=="001"][0]["actual_tokens"])')"
+plan_tokens2="$(python3 -c 'import json; d=json.load(open("'"$dir"'/.mvp/plan.json")); print([t for t in d["tasks"] if t["id"]=="001"][0]["actual_tokens"])')"
 assert_eq "complete: second call stores delta, not cumulative sum" "500" "$plan_tokens2"
 event_count="$(python3 -c 'print(sum(1 for _ in open("'"$events_file"'")))')"
 assert_eq "complete: telemetry has one event per call" "2" "$event_count"
@@ -256,7 +256,7 @@ assert_eq "complete: second event delta_tokens is per-call, not cumulative" "500
 dir="$(new_repo)"
 run_plan_io "$dir" ledger --task 001 --sha abc1234 >/dev/null
 run_plan_io "$dir" ledger --task 002 --sha def5678 >/dev/null
-ledger_file="$dir/.claude/state/ledger.md"
+ledger_file="$dir/.mvp/ledger.md"
 assert_true "ledger: file exists" "$([ -f "$ledger_file" ] && echo true || echo false)"
 header_count="$(grep -c '^# Ledger ' "$ledger_file")"
 assert_eq "ledger: exactly one header line" "1" "$header_count"
@@ -403,8 +403,8 @@ assert_eq "I-3 leading-./ form is accepted: ok" "True" "$(json_field "$out" 'd["
 
 dir="$(mktemp -d -p "$tmproot")"
 ( cd "$dir" && git init -q && git config user.email test@test.local && git config user.name test )
-mkdir -p "$dir/.claude/state"
-echo "operator paused the run" > "$dir/.claude/state/user-interrupt.md"
+mkdir -p "$dir/.mvp"
+echo "operator paused the run" > "$dir/.mvp/user-interrupt.md"
 out="$(run_plan_io "$dir" next)"; rc=$?
 assert_eq "M-1 interrupt before missing plan.json: exit code" "0" "$rc"
 assert_eq "M-1 interrupt before missing plan.json: ok" "True" "$(json_field "$out" 'd["ok"]')"
@@ -426,19 +426,19 @@ assert_eq "N-1 next returns head_sha" "$expected_head" "$(json_field "$out" 'd["
 # so the free-text task title never passes through a shell or a prompt.
 dir="$(new_repo)"
 mutate_plan "$dir" 'plan["tasks"][0]["title"] = "Title with \"quotes\" and $VAR and `backtick`"'
-out="$(run_plan_io "$dir" complete 001 --tokens 5 --dispatches 9 --write-msg .claude/state/msg.txt)"
+out="$(run_plan_io "$dir" complete 001 --tokens 5 --dispatches 9 --write-msg .mvp/msg.txt)"
 assert_eq "N-2 complete ok" "True" "$(json_field "$out" 'd["ok"]')"
-subject="$(head -n1 "$dir/.claude/state/msg.txt")"
+subject="$(head -n1 "$dir/.mvp/msg.txt")"
 assert_eq "N-3 subject keeps the title verbatim" \
   'feat: task 001: Title with "quotes" and $VAR and `backtick`' "$subject"
-assert_eq "N-4 msg file is exactly one line" "1" "$(wc -l < "$dir/.claude/state/msg.txt" | tr -d ' ')"
+assert_eq "N-4 msg file is exactly one line" "1" "$(wc -l < "$dir/.mvp/msg.txt" | tr -d ' ')"
 if ! printf '%s' "$subject" | grep -qE '^(feat|fix|ci|chore|test|docs|refactor)(\(.+\))?: '; then
   echo "FAIL: N-5 subject fails finalize.sh prefix check: $subject" >&2
   fail=1
 fi
 
 # telemetry is additive: delta_tokens survives, the honesty fields join it
-ev="$(tail -n1 "$dir/.claude/state/telemetry/events.jsonl")"
+ev="$(tail -n1 "$dir/.mvp/telemetry/events.jsonl")"
 assert_eq "N-6 telemetry keeps delta_tokens" "5" "$(json_field "$ev" 'd["delta_tokens"]')"
 assert_eq "N-7 telemetry records dispatches" "9" "$(json_field "$ev" 'd["dispatches"]')"
 assert_eq "N-8 telemetry marks the figure controller-only" "True" "$(json_field "$ev" 'd["controller_only"]')"
@@ -446,9 +446,9 @@ assert_eq "N-8 telemetry marks the figure controller-only" "True" "$(json_field 
 # a newline in the title must not push the real subject into the commit body
 dir="$(new_repo)"
 mutate_plan "$dir" 'plan["tasks"][0]["title"] = "first\nsecond"'
-run_plan_io "$dir" complete 001 --tokens 1 --write-msg .claude/state/msg.txt >/dev/null
+run_plan_io "$dir" complete 001 --tokens 1 --write-msg .mvp/msg.txt >/dev/null
 assert_eq "N-9 newline in title collapses to one line" "1" \
-  "$(wc -l < "$dir/.claude/state/msg.txt" | tr -d ' ')"
+  "$(wc -l < "$dir/.mvp/msg.txt" | tr -d ' ')"
 
 # ledger --sha HEAD resolves the commit itself, so the call can be chained
 # after finalize.sh in one shell command instead of costing its own relay.
@@ -458,7 +458,7 @@ out="$(run_plan_io "$dir" ledger --task 001 --sha HEAD)"
 assert_eq "N-10 ledger --sha HEAD ok" "True" "$(json_field "$out" 'd["ok"]')"
 assert_eq "N-11 ledger echoes the resolved sha" "$head_sha" "$(json_field "$out" 'd["data"]["sha"]')"
 assert_eq "N-12 ledger line carries the real sha" "1" \
-  "$(grep -c "Task 001: complete ($head_sha)" "$dir/.claude/state/ledger.md")"
+  "$(grep -c "Task 001: complete ($head_sha)" "$dir/.mvp/ledger.md")"
 
 # concerns are written BY THE SCRIPT — this is the write the SKILL was told to
 # make and skipped on 36 of 36 vireo tasks.
@@ -467,9 +467,9 @@ run_plan_io "$dir" ledger --task 002 --sha HEAD \
   --concern "declared-files hint mismatch: a.py, b.py
 review finding refuted, not fixed: no caller reaches that path" >/dev/null
 assert_eq "N-13 first concern line persisted" "1" \
-  "$(grep -c 'concern (task 002): declared-files hint mismatch: a.py, b.py' "$dir/.claude/state/ledger.md")"
+  "$(grep -c 'concern (task 002): declared-files hint mismatch: a.py, b.py' "$dir/.mvp/ledger.md")"
 assert_eq "N-14 second concern line persisted" "1" \
-  "$(grep -c 'concern (task 002): review finding refuted' "$dir/.claude/state/ledger.md")"
+  "$(grep -c 'concern (task 002): review finding refuted' "$dir/.mvp/ledger.md")"
 # a concern must never look like it belongs to the following task
 assert_eq "N-15 concerns precede their Task line" "1" \
   "$(python3 -c "
@@ -478,7 +478,7 @@ lines = open(sys.argv[1]).read().splitlines()
 ci = max(i for i, l in enumerate(lines) if l.startswith('  concern (task 002)'))
 ti = max(i for i, l in enumerate(lines) if l.startswith('Task 002: complete'))
 print(1 if ci < ti else 0)
-" "$dir/.claude/state/ledger.md")"
+" "$dir/.mvp/ledger.md")"
 
 # ---------------------------------------------------------------------------
 # (O) add-task — a plan discovered mid-run must be able to grow.
@@ -501,7 +501,7 @@ assert_eq "O-4 the new task is pending" "pending" \
 import json,sys
 p=json.load(open(sys.argv[1]))
 print([t for t in p['tasks'] if t['id']=='004'][0]['status'])
-" "$dir/.claude/state/plan.json")"
+" "$dir/.mvp/plan.json")"
 
 # a caller cannot smuggle in an already-complete task
 dir="$(new_repo)"
@@ -514,7 +514,7 @@ assert_eq "O-5 status is forced to pending" "pending" \
 import json,sys
 p=json.load(open(sys.argv[1]))
 print([t for t in p['tasks'] if t['id']=='004'][0]['status'])
-" "$dir/.claude/state/plan.json")"
+" "$dir/.mvp/plan.json")"
 
 # duplicate id is refused
 dir="$(new_repo)"
@@ -528,9 +528,9 @@ assert_eq "O-7 duplicate id ok:false" "False" "$(json_field "$out" 'd["ok"]')"
 # an invalid task must leave plan.json byte-identical — validation runs on the
 # RESULT, and a rejected write is a no-op, not a partial one
 dir="$(new_repo)"
-before="$(shasum "$dir/.claude/state/plan.json" | cut -d' ' -f1)"
+before="$(shasum "$dir/.mvp/plan.json" | cut -d' ' -f1)"
 out="$(run_plan_io "$dir" add-task --json '{"title":"no fields at all"}')"; rc=$?
-after="$(shasum "$dir/.claude/state/plan.json" | cut -d' ' -f1)"
+after="$(shasum "$dir/.mvp/plan.json" | cut -d' ' -f1)"
 assert_eq "O-8 invalid task exit code" "1" "$rc"
 assert_eq "O-9 invalid task reports errors" "True" \
   "$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(len(d['data']['errors'])>0)" "$out")"
@@ -577,7 +577,7 @@ assert_eq "O-15 next picks the newly added task" "004" "$(json_field "$out" 'd["
 
 # seed_state <dir> <phase> — writes the state.json that gate.sh/plan-io read.
 seed_state() {
-  printf '{"phase":"%s","pending_critical":0}\n' "$2" > "$1/.claude/state/state.json"
+  printf '{"phase":"%s","pending_critical":0}\n' "$2" > "$1/.mvp/state.json"
 }
 
 # finished_repo -> a repo whose tasks are all done and whose phase is "done"
@@ -595,24 +595,24 @@ out="$(run_plan_io "$dir" reopen --reason "translate UI to Russian")"
 assert_eq "P-1 reopen ok on a finished plan" "True" "$(json_field "$out" 'd["ok"]')"
 assert_eq "P-2 epoch bumped to 2" "2" "$(json_field "$out" 'd["data"]["epoch"]')"
 assert_eq "P-3 phase moved to plan-done" "plan-done" \
-  "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['phase'])" "$dir/.claude/state/state.json")"
+  "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['phase'])" "$dir/.mvp/state.json")"
 assert_eq "P-4 reason recorded in reopened[]" "translate UI to Russian" \
   "$(python3 -c "
 import json,sys
 p=json.load(open(sys.argv[1])); print(p['reopened'][-1]['reason'])
-" "$dir/.claude/state/plan.json")"
+" "$dir/.mvp/plan.json")"
 assert_eq "P-5 base_sha captured" "40" \
   "$(python3 -c "
 import json,sys
 p=json.load(open(sys.argv[1])); print(len(p['reopened'][-1]['base_sha'] or ''))
-" "$dir/.claude/state/plan.json")"
+" "$dir/.mvp/plan.json")"
 # history is untouched: every pre-existing task keeps status done
 assert_eq "P-6 completed tasks are not reset" "3" \
   "$(python3 -c "
 import json,sys
 p=json.load(open(sys.argv[1]))
 print(sum(1 for t in p['tasks'] if t['status']=='done'))
-" "$dir/.claude/state/plan.json")"
+" "$dir/.mvp/plan.json")"
 
 # --invariant lands in the file build inlines into every task brief
 dir="$(finished_repo)"
@@ -620,9 +620,9 @@ out="$(run_plan_io "$dir" reopen --reason "ru locale" --invariant "User-facing t
 assert_eq "P-7 invariant echoed back" "User-facing text is Russian; identifiers stay English" \
   "$(json_field "$out" 'd["data"]["invariant"]')"
 assert_contains "P-8 invariant appended to invariants.md" \
-  "$(cat "$dir/.claude/state/invariants.md")" "User-facing text is Russian"
+  "$(cat "$dir/.mvp/invariants.md")" "User-facing text is Russian"
 assert_contains "P-9 invariant tagged with its epoch" \
-  "$(cat "$dir/.claude/state/invariants.md")" "(epoch 2)"
+  "$(cat "$dir/.mvp/invariants.md")" "(epoch 2)"
 
 # --reason is mandatory: a reopen with no recorded why is the hand-typed
 # phase flip this verb replaces
@@ -646,7 +646,7 @@ assert_eq "P-14 second reopen refused" "False" "$(json_field "$out" 'd["ok"]')"
 assert_contains "P-15 refusal says the plan is already open" \
   "$(json_field "$out" 'd["reason"]')" "already open"
 assert_eq "P-16 epoch was NOT bumped twice" "2" \
-  "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['epoch'])" "$dir/.claude/state/plan.json")"
+  "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['epoch'])" "$dir/.mvp/plan.json")"
 
 # end-to-end: reopen -> add-task -> next hands back the new work
 dir="$(finished_repo)"
@@ -677,7 +677,7 @@ printf '[%s,{"title":"broken"}]' "$TASK_A" > "$dir/batch.json"
 out="$(run_plan_io "$dir" add-task --json-file "$dir/batch.json")"
 assert_eq "Q-4 invalid batch refused" "False" "$(json_field "$out" 'd["ok"]')"
 assert_eq "Q-5 plan.json untouched by a failed batch" "3" \
-  "$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1]))['tasks']))" "$dir/.claude/state/plan.json")"
+  "$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1]))['tasks']))" "$dir/.mvp/plan.json")"
 
 # duplicate ids WITHIN one batch are caught, not silently collapsed
 dir="$(new_repo)"

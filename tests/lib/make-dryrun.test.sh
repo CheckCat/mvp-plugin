@@ -54,11 +54,11 @@ assert_true "fixture: is a git repo" "$([ -d "$repo_path/.git" ] && echo true ||
 porcelain="$(cd "$repo_path" && git status --porcelain)"
 assert_eq "fixture: clean working tree" "" "$porcelain"
 
-assert_true "fixture: plan.json exists" "$([ -f "$repo_path/.claude/state/plan.json" ] && echo true || echo false)"
-assert_true "fixture: ci-mirror.sh exists and is executable" "$([ -x "$repo_path/.claude/state/ci-mirror.sh" ] && echo true || echo false)"
-assert_true "fixture: invariants.md exists" "$([ -f "$repo_path/.claude/state/invariants.md" ] && echo true || echo false)"
+assert_true "fixture: plan.json exists" "$([ -f "$repo_path/.mvp/plan.json" ] && echo true || echo false)"
+assert_true "fixture: ci-mirror.sh exists and is executable" "$([ -x "$repo_path/.mvp/ci-mirror.sh" ] && echo true || echo false)"
+assert_true "fixture: invariants.md exists" "$([ -f "$repo_path/.mvp/invariants.md" ] && echo true || echo false)"
 
-ci_out="$(cd "$repo_path" && bash .claude/state/ci-mirror.sh; echo "rc=$?")"
+ci_out="$(cd "$repo_path" && bash .mvp/ci-mirror.sh; echo "rc=$?")"
 assert_eq "fixture: ci-mirror.sh exits 0" "rc=0" "$ci_out"
 
 # ---------------------------------------------------------------------------

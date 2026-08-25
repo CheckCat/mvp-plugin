@@ -25,7 +25,7 @@ What this does, in order:
    from this process, i.e. the target project root) and captures its
    single-line JSON contract output. Its `data.errors` (schema/DAG/boundary
    violations) are folded into this script's own `errors` list verbatim.
-3. Reads `.claude/state/plan.json` directly, READ-ONLY (never writes it —
+3. Reads `.mvp/plan.json` directly, READ-ONLY (never writes it —
    the planner subagent is the only Write path, see skills/plan/SKILL.md),
    and adds two more classes of plan-level error, both computed from task
    FIELDS only (role, files) — never from title substrings:
@@ -131,12 +131,12 @@ def is_api_client_path(f: object) -> bool:
 
 
 def read_plan_tasks() -> tuple[list[dict], int]:
-    """Read `.claude/state/plan.json` (cwd-relative, same convention as
+    """Read `.mvp/plan.json` (cwd-relative, same convention as
     lib/plan-io.mjs), READ-ONLY. Returns (tasks, total_estimate). Any
     read/parse failure returns ([], 0) — the node-side error already
     reports the underlying cause; this function just degrades gracefully
     so the plan-level checks below simply have nothing to check."""
-    plan_path = Path(".claude/state/plan.json")
+    plan_path = Path(".mvp/plan.json")
     try:
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -289,7 +289,7 @@ def main() -> int:
     data_out = {"errors": errors, "total_estimate": total_estimate}
 
     if errors:
-        emit(False, f"{len(errors)} plan validation error(s)", "fix .claude/state/plan.json (see data.errors)", data_out)
+        emit(False, f"{len(errors)} plan validation error(s)", "fix .mvp/plan.json (see data.errors)", data_out)
         return 1
 
     emit(True, None, None, data_out)

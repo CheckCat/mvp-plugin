@@ -15,7 +15,7 @@ just yours). Do not start editing before you've read it in full.
 
 You may create or modify files ONLY under `{{BOUNDARY}}`. The single
 exception is your report file, `{{REPORT_PATH}}` (under
-`.claude/state/reports/`), which by design sits outside the boundary. Any
+`.mvp/reports/`), which by design sits outside the boundary. Any
 other file outside `{{BOUNDARY}}` is forbidden — do not touch sibling
 services, shared root config, or CI files even if it would be convenient.
 If the task genuinely cannot be completed without a change outside the
@@ -37,7 +37,7 @@ Work is metered — be economical:
 Once your change is in place, run:
 
 ```
-bash .claude/state/ci-mirror.sh
+bash .mvp/ci-mirror.sh
 ```
 
 Iterate until it exits 0. This mirrors CI exactly — never invent a
@@ -103,5 +103,5 @@ detail lives in `{{REPORT_PATH}}`.
 - `{{BRIEF_PATH}}` — this task's requirements file
 - `{{BOUNDARY}}` — the service_path your file changes must stay inside
 - `{{TASK_ID}}` — this task's id
-- `{{REPORT_PATH}}` — `.claude/state/reports/task-{{TASK_ID}}.md`, the one
+- `{{REPORT_PATH}}` — `.mvp/reports/task-{{TASK_ID}}.md`, the one
   file you may write outside `{{BOUNDARY}}`

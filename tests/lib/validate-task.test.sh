@@ -30,7 +30,7 @@ new_git_repo() {
   dir="$(mktemp -d -p "$tmproot")"
   (
     cd "$dir" && git init -q && git config user.email test@test.local && git config user.name test
-    mkdir -p app .claude/state
+    mkdir -p app .mvp
     echo 'init' >app/init.py
     git add app/init.py
     git commit -q -m "chore: init"
@@ -38,12 +38,12 @@ new_git_repo() {
   printf '%s' "$dir"
 }
 
-write_ci_mirror() { # <dir> <line1> [<line2> ...] -- writes .claude/state/ci-mirror.sh
+write_ci_mirror() { # <dir> <line1> [<line2> ...] -- writes .mvp/ci-mirror.sh
   local dir="$1"
   shift
   {
     for line in "$@"; do printf '%s\n' "$line"; done
-  } >"$dir/.claude/state/ci-mirror.sh"
+  } >"$dir/.mvp/ci-mirror.sh"
 }
 
 # run_vt <projectdir> <arg...> -> sets VT_OUT VT_EXIT
@@ -101,7 +101,7 @@ run_vt "$d_b" 001 --boundary app --files app/foo.py
 
 assert_eq "(b) exit code" "1" "$VT_EXIT"
 assert_eq "(b) ok:false" "False" "$(json_field "$VT_OUT" 'd["ok"]')"
-assert_eq "(b) ci detail" "missing .claude/state/ci-mirror.sh" "$(violations_of_check "$VT_OUT" ci)"
+assert_eq "(b) ci detail" "missing .mvp/ci-mirror.sh" "$(violations_of_check "$VT_OUT" ci)"
 
 # --- (c) failing command in ci-mirror.sh -> violation ci, later cmd skipped --
 
@@ -134,12 +134,12 @@ assert_eq "(d) exit code" "1" "$VT_EXIT"
 assert_eq "(d) ok:false" "False" "$(json_field "$VT_OUT" 'd["ok"]')"
 assert_eq "(d) boundary detail" "other/stray.py" "$(violations_of_check "$VT_OUT" boundary)"
 
-# --- (d2) file under .claude/state is always allowed regardless of boundary --
+# --- (d2) file under .mvp is always allowed regardless of boundary --
 
 d_d2="$(new_git_repo)"
 write_ci_mirror "$d_d2" "true"
-echo '{}' >"$d_d2/.claude/state/report.json"
-(cd "$d_d2" && git add .claude/state/report.json)
+echo '{}' >"$d_d2/.mvp/report.json"
+(cd "$d_d2" && git add .mvp/report.json)
 
 run_vt "$d_d2" 001 --boundary app --files ""
 
@@ -211,10 +211,10 @@ assert_eq "(h) ok:true" "True" "$(json_field "$VT_OUT" 'd["ok"]')"
 
 d_i="$(new_git_repo)"
 write_ci_mirror "$d_i" "true"
-printf 'BOUNDARY_EXEMPT: uv.lock\n' >"$d_i/.claude/state/invariants.md"
+printf 'BOUNDARY_EXEMPT: uv.lock\n' >"$d_i/.mvp/invariants.md"
 echo 'x' >"$d_i/app/foo.py"
 echo 'lock' >"$d_i/uv.lock"
-(cd "$d_i" && git add app/foo.py uv.lock .claude/state/invariants.md)
+(cd "$d_i" && git add app/foo.py uv.lock .mvp/invariants.md)
 
 run_vt "$d_i" 001 --boundary app --files app/foo.py
 

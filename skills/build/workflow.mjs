@@ -226,7 +226,7 @@
 //     target project this is expected to stay quiet because state-adjacent
 //     scratch paths are typically gitignored; the dry-run fixture
 //     (tests/fixtures/dryrun/make-dryrun.sh) does NOT add a .gitignore, so
-//     once a real run starts writing `.claude/state/briefs/`, `reports/`,
+//     once a real run starts writing `.mvp/briefs/`, `reports/`,
 //     `review/`, `patches/`, `commit-messages/`, etc., those will show
 //     up as "untracked" noise in later tasks' review packages alongside the
 //     actual new file(s) a task creates. Deliberately left the fixture as-is
@@ -237,7 +237,7 @@
 //     that isn't actually established anywhere else in this plugin
 //     (checked: no other lib/skills output ships a .gitignore template).
 //     If the noise proves genuinely disruptive at the dry-run, the fix is a
-//     one-line `.claude/state/.gitignore` added to make-dryrun.sh, not a
+//     one-line `.mvp/.gitignore` added to make-dryrun.sh, not a
 //     change to review-package.sh itself.
 //
 // 18. park() SKIPS the reset relay entirely when the task's boundary
@@ -247,7 +247,7 @@
 //     directories a later task creates) correctly parked the task, but
 //     park()'s reset line
 //     — `git checkout -- "." ...; git restore --staged "." ...; git clean
-//     -fd -e .claude/state -- "."` — is a repo-WIDE destructive reset once
+//     -fd -e .mvp -- "."` — is a repo-WIDE destructive reset once
 //     boundary is `.`, and the platform's safety classifier BLOCKED it
 //     (rightly: for a real project this is the whole repo, not a task-scoped
 //     path). The relay then returned no `{line}`, and relayLine() threw,
@@ -306,7 +306,7 @@
 //        be waved through by an accompanying file-list mismatch.
 //     b) FINALIZE. Staging is by BOUNDARY, not by the declared list:
 //        finalize()'s `--files` argument is the task's `boundary` path (plus
-//        `.claude/state`, which finalize.sh's build-task scope appends on its
+//        `.mvp`, which finalize.sh's build-task scope appends on its
 //        own). Staging the declared list would have SILENTLY DROPPED exactly
 //        the files part (a) just stopped blocking on — an undeclared test
 //        file would pass validation, get reviewed, and then never be
@@ -415,7 +415,7 @@
 //
 //     ROUND 3 (empirical, live build smoke, run 005, journal evidence):
 //     `{"ok": true, "data": "{\n \"ok\": true, \"reason\": null,
-//     \"hint\": null, \"data\": {\"path\": \".claude/state/review/
+//     \"hint\": null, \"data\": {\"path\": \".mvp/review/
 //     task-002.md\"}}"}` — the relay agent stuffed the ENTIRE contract line
 //     into `data` as a string, i.e. one full envelope nested inside
 //     another. Round-2 coercion correctly `JSON.parse`s that string but then
@@ -956,7 +956,7 @@ function parseReReview(text) {
 // re-validates and lets that be the judge; review path parks directly on a
 // failed apply — fix round item 6).
 async function applyPatchesFlow(id, patches, phaseTitle) {
-  const patchesPath = `.claude/state/patches/patches-${id}.json`;
+  const patchesPath = `.mvp/patches/patches-${id}.json`;
   dispatchCount += 1;
   await agent(
     `${cwdPrefixLine()}Write EXACTLY this JSON to ${patchesPath} using the Write tool (create the file, overwrite any existing content, no extra text, no markdown code fences):\n${JSON.stringify(patches)}`,
@@ -1286,9 +1286,9 @@ async function finalize(id, boundary, tokensDelta, dispatches, concerns, phaseTi
   // and review/: a 55-task run otherwise buries plan.json, ledger.md and
   // invariants.md under 55 commit-msg-*.txt files in the same listing.
   // plan-io's writeTextAtomic mkdir -p's the parent, so no setup step is
-  // needed, and finalize.sh stages `.claude/state` wholesale — the nested path
+  // needed, and finalize.sh stages `.mvp` wholesale — the nested path
   // is committed exactly as the flat one was.
-  const msgPath = `.claude/state/commit-messages/commit-msg-${id}.txt`;
+  const msgPath = `.mvp/commit-messages/commit-msg-${id}.txt`;
   const concernText = (concerns || []).filter(Boolean).join('\n');
   const concernArg = concernText ? ` --concern ${shQuote(concernText)}` : '';
 
@@ -1296,7 +1296,7 @@ async function finalize(id, boundary, tokensDelta, dispatches, concerns, phaseTi
   // note 17b): the declared list is a hint, so anything the task legitimately
   // created inside the boundary but the plan never listed (a test file, a
   // fixture) must still be committed. One quoted path — explicit, never
-  // `git add -A`; finalize.sh's build-task scope appends `.claude/state`
+  // `git add -A`; finalize.sh's build-task scope appends `.mvp`
   // itself, which is where the report/brief/state files live.
   const cmd = [
     `node "${lib}/plan-io.mjs" complete "${id}" --tokens ${tokensDelta} --dispatches ${dispatches} --write-msg "${msgPath}"`,
@@ -1332,12 +1332,12 @@ function isRepoRootBoundary(boundary) {
 // task's boundary — including untracked files the implementer created
 // (`git clean -fd`, fix round item 2/7: without it, an untracked file left
 // behind would make every subsequent `plan-io next` halt dirty-tree forever)
-// but NEVER `.claude/state` (final-review finding I1: a root-level boundary
+// but NEVER `.mvp` (final-review finding I1: a root-level boundary
 // — `.` — made that clean wipe the pipeline's own state directory, i.e. the
 // brief, the report and the freshly-written failed-status plan.json, taking
-// the run's memory with it). `-e .claude/state` must come BEFORE the `--`:
+// the run's memory with it). `-e .mvp` must come BEFORE the `--`:
 // after it, git parses `-e` as a pathspec, not a flag (verified empirically
-// in a scratch repo — the post-`--` form removed .claude/state anyway)
+// in a scratch repo — the post-`--` form removed .mvp anyway)
 // — mark it failed via plan-io.mjs (the only mutating, park-safe subcommand
 // — plan-io has no dedicated "park" verb), and return a stop-and-ask halt.
 // The reset line's output is not JSON (often no output at all), so this uses
@@ -1367,7 +1367,7 @@ async function park(id, boundary, why) {
     );
   } else {
     await relayLine(
-      `git checkout -- "${boundary}" 2>/dev/null; git restore --staged "${boundary}" 2>/dev/null; git clean -fd -e .claude/state -- "${boundary}" 2>/dev/null; true`,
+      `git checkout -- "${boundary}" 2>/dev/null; git restore --staged "${boundary}" 2>/dev/null; git clean -fd -e .mvp -- "${boundary}" 2>/dev/null; true`,
       { phase: 'Finalize', label: `park-clean-${id}` },
     );
   }
@@ -1394,7 +1394,7 @@ async function runOneTask(adv) {
   const modelClass = adv.data.model_class;
   const declaredFiles = Array.isArray(adv.data.files) ? adv.data.files : [];
   const filesCsv = declaredFiles.join(',');
-  const reportPath = `.claude/state/reports/task-${id}.md`;
+  const reportPath = `.mvp/reports/task-${id}.md`;
 
   // Token-delta measurement starts here, at the very top of the task
   // iteration — BEFORE the implementer dispatch (fix round item 4: it

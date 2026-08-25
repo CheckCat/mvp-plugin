@@ -23,9 +23,9 @@ ${CLAUDE_PLUGIN_ROOT}/lib/gate.sh plan
 
 ## Шаг 2 — планнер-субагент
 
-Дёрни Agent tool, `subagent_type: general-purpose` (нужен Write — планнер пишет `plan.json` напрямую). Промпт — секция «Planner prompt» ниже ДОСЛОВНО. Планнер сам читает пути (`docs/product/`, `.claude/state/invariants.md`, `docs/architecture.md`) — ему передаются пути, не содержимое.
+Дёрни Agent tool, `subagent_type: general-purpose` (нужен Write — планнер пишет `plan.json` напрямую). Промпт — секция «Planner prompt» ниже ДОСЛОВНО. Планнер сам читает пути (`docs/product/`, `.mvp/invariants.md`, `docs/architecture.md`) — ему передаются пути, не содержимое.
 
-Планнер пишет `.claude/state/plan.json` целиком через Write — **единственное место, где `plan.json` создаётся**; дальше файл трогает только `lib/plan-io.mjs`. Жди от планнера ТОЛЬКО счётчики (фазы/задачи/estimate) — не план текстом, он уже в файле.
+Планнер пишет `.mvp/plan.json` целиком через Write — **единственное место, где `plan.json` создаётся**; дальше файл трогает только `lib/plan-io.mjs`. Жди от планнера ТОЛЬКО счётчики (фазы/задачи/estimate) — не план текстом, он уже в файле.
 
 ## Шаг 3 — валидация (скриптовый гейт)
 
@@ -33,7 +33,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/gate.sh plan
 ${CLAUDE_PLUGIN_ROOT}/skills/plan/scripts/validate-plan.py
 ```
 
-`ok:false` → покажи планнеру `data.errors` дословно, сделай **ОДИН** re-dispatch: тот же промпт из Шага 2 + приписка «Предыдущая попытка провалила validate-plan.py: <errors>. Перепиши `.claude/state/plan.json` через Write так, чтобы каждая ошибка исчезла.» Повтори Шаг 3. Снова `ok:false` → Stop&Ask с полным `data.errors`, не третья попытка молча.
+`ok:false` → покажи планнеру `data.errors` дословно, сделай **ОДИН** re-dispatch: тот же промпт из Шага 2 + приписка «Предыдущая попытка провалила validate-plan.py: <errors>. Перепиши `.mvp/plan.json` через Write так, чтобы каждая ошибка исчезла.» Повтори Шаг 3. Снова `ok:false` → Stop&Ask с полным `data.errors`, не третья попытка молча.
 
 `ok:true` → `data.total_estimate` — единственный источник суммарной оценки для Шага 4/HARD-GATE, не пересчитывай сам.
 
@@ -43,12 +43,12 @@ ${CLAUDE_PLUGIN_ROOT}/skills/plan/scripts/validate-plan.py
 ${CLAUDE_PLUGIN_ROOT}/lib/plan-io.mjs summary
 ```
 
-`data.total/done/pending/failed` и `data.phases.<level>` — единственный источник цифр. Для списка задач по фазам прочитай `.claude/state/plan.json` (read-only) и сгруппируй по `level`. Сгенерируй через `Write`:
+`data.total/done/pending/failed` и `data.phases.<level>` — единственный источник цифр. Для списка задач по фазам прочитай `.mvp/plan.json` (read-only) и сгруппируй по `level`. Сгенерируй через `Write`:
 
 ```markdown
 # Project Plan
 
-Автогенерация из `.claude/state/plan.json` + `plan-io.mjs summary`. **Не редактируй вручную** — правки потеряются при следующей генерации. Меняй `plan.json` (через `plan-io.mjs`), не этот файл.
+Автогенерация из `.mvp/plan.json` + `plan-io.mjs summary`. **Не редактируй вручную** — правки потеряются при следующей генерации. Меняй `plan.json` (через `plan-io.mjs`), не этот файл.
 
 ## Прогресс
 - Всего задач: <data.total>
@@ -76,7 +76,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh set phase plan-done
 ${CLAUDE_PLUGIN_ROOT}/lib/finalize.sh plan <msg-file>
 ```
 
-`<msg-file>` первой строкой: `chore: project plan v1`. Коммитит `.claude/state` + `docs/plan.md` (пресет `plan`).
+`<msg-file>` первой строкой: `chore: project plan v1`. Коммитит `.mvp` + `docs/plan.md` (пресет `plan`).
 
 ## Planner prompt
 
@@ -84,13 +84,13 @@ ${CLAUDE_PLUGIN_ROOT}/lib/finalize.sh plan <msg-file>
 
 ```
 Ты — архитектор MVP. По предоставленным путям построй DAG задач и запиши его
-в `.claude/state/plan.json` через Write. Не выводи план в чат — только
+в `.mvp/plan.json` через Write. Не выводи план в чат — только
 короткую сводку (число фаз, число задач, суммарный estimate_tokens).
 
 Входные пути (прочитай их сам — тебе передали пути, не содержимое):
 - `docs/product/` — все .md файлы (business-logic.md, technical-solutions.md,
   glossary.md, analysis-grey-zones.md — если есть)
-- `.claude/state/invariants.md` — архитектурные инварианты ИМЕННО ЭТОГО
+- `.mvp/invariants.md` — архитектурные инварианты ИМЕННО ЭТОГО
   проекта (Architectural invariants / Service boundaries / Forbidden edges).
   Не выдумывай других инвариантов, которых там нет.
 - `docs/architecture.md` — карта сервисов проекта
@@ -148,7 +148,7 @@ exhaustive-контракт (не перечисляй тесты/lock-файл�
 - `status` — всегда `"pending"` на старте.
 - `complexity_class` — см. таксономию ниже.
 
-`.claude/state/plan.json` — объект вида `{"tasks": [ {<задача>}, … ]}`;
+`.mvp/plan.json` — объект вида `{"tasks": [ {<задача>}, … ]}`;
 никакого другого top-level ключа.
 
 ## complexity_class — таксономия (обязательно на каждой задаче)

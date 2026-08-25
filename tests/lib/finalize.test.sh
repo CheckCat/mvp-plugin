@@ -61,8 +61,8 @@ head_sha() { # <dir> -> HEAD sha or "none"
 #         file (operator's) NOT included in the commit -------------------------
 
 d_a="$(new_git_repo)"
-mkdir -p "$d_a/.claude/state"
-echo '{}' >"$d_a/.claude/state/state.json"
+mkdir -p "$d_a/.mvp"
+echo '{}' >"$d_a/.mvp/state.json"
 echo 'print(1)' >"$d_a/task.py"
 echo 'operator wip' >"$d_a/unrelated.txt"
 (cd "$d_a" && git add unrelated.txt)
@@ -97,8 +97,8 @@ fi
 # --- (b) msg with subject "WIP: x" -> ok:false, no commit created ------------
 
 d_b="$(new_git_repo)"
-mkdir -p "$d_b/.claude/state"
-echo '{}' >"$d_b/.claude/state/state.json"
+mkdir -p "$d_b/.mvp"
+echo '{}' >"$d_b/.mvp/state.json"
 echo 'x' >"$d_b/task.py"
 write_msg "$d_b/msg.txt" "WIP: x"
 BEFORE_B="$(head_sha "$d_b")"
@@ -113,8 +113,8 @@ assert_eq "(b) no commit created" "$BEFORE_B" "$(head_sha "$d_b")"
 #         via the other existing path -----------------------------------------
 
 d_c="$(new_git_repo)"
-mkdir -p "$d_c/.claude/state"
-echo '{}' >"$d_c/.claude/state/state.json"
+mkdir -p "$d_c/.mvp"
+echo '{}' >"$d_c/.mvp/state.json"
 echo 'x' >"$d_c/exists.py"
 write_msg "$d_c/msg.txt" "feat: partial files"
 
@@ -150,10 +150,10 @@ fi
 #          -> the deletion is staged and lands in the commit -----------------
 
 d_c3="$(new_git_repo)"
-mkdir -p "$d_c3/.claude/state"
-echo '{}' >"$d_c3/.claude/state/state.json"
+mkdir -p "$d_c3/.mvp"
+echo '{}' >"$d_c3/.mvp/state.json"
 echo 'x' >"$d_c3/gone.py"
-(cd "$d_c3" && git add gone.py .claude/state/state.json && git commit -qm "chore: seed")
+(cd "$d_c3" && git add gone.py .mvp/state.json && git commit -qm "chore: seed")
 rm "$d_c3/gone.py"
 write_msg "$d_c3/msg.txt" "fix: drop gone.py"
 
@@ -176,10 +176,10 @@ fi
 #         --files, even though it was never listed in --files -------------
 
 d_d="$(new_git_repo)"
-mkdir -p "$d_d/.claude/state"
-printf 'BOUNDARY_EXEMPT: uv.lock\n' >"$d_d/.claude/state/invariants.md"
+mkdir -p "$d_d/.mvp"
+printf 'BOUNDARY_EXEMPT: uv.lock\n' >"$d_d/.mvp/invariants.md"
 echo 'lock-v1' >"$d_d/uv.lock"
-(cd "$d_d" && git add .claude/state/invariants.md uv.lock && git commit -qm "chore: seed")
+(cd "$d_d" && git add .mvp/invariants.md uv.lock && git commit -qm "chore: seed")
 echo 'print(1)' >"$d_d/task.py"
 echo 'lock-v2' >"$d_d/uv.lock"
 write_msg "$d_d/msg.txt" "feat: add task with exempt lockfile"
@@ -247,8 +247,8 @@ fi
 # --- non-build-task scope: --files EXTENDS the preset (documented choice) ----
 
 d_ext="$(new_git_repo)"
-mkdir -p "$d_ext/.claude/state"
-echo '{}' >"$d_ext/.claude/state/state.json"
+mkdir -p "$d_ext/.mvp"
+echo '{}' >"$d_ext/.mvp/state.json"
 echo '# plan' >"$d_ext/docs/plan.md"
 echo 'extra' >"$d_ext/extra.txt"
 write_msg "$d_ext/msg.txt" "chore: plan with extension"
@@ -274,26 +274,26 @@ run_finalize "$d_brief" brief msg.txt
 assert_eq "(preset brief) exit code" "0" "$F_EXIT"
 
 d_clarify="$(new_git_repo)"
-mkdir -p "$d_clarify/docs/product" "$d_clarify/.claude/state"
+mkdir -p "$d_clarify/docs/product" "$d_clarify/.mvp"
 echo 'x' >"$d_clarify/docs/product/business-logic.md"
-echo '{}' >"$d_clarify/.claude/state/state.json"
+echo '{}' >"$d_clarify/.mvp/state.json"
 write_msg "$d_clarify/msg.txt" "chore: clarify scope"
 run_finalize "$d_clarify" clarify msg.txt
 assert_eq "(preset clarify) exit code" "0" "$F_EXIT"
 
 d_bootstrap="$(new_git_repo)"
-mkdir -p "$d_bootstrap/.claude/agents" "$d_bootstrap/.claude/state"
+mkdir -p "$d_bootstrap/.claude/agents" "$d_bootstrap/.mvp"
 echo '# CLAUDE' >"$d_bootstrap/CLAUDE.md"
 echo '# ARCH' >"$d_bootstrap/docs/architecture.md"
 echo 'x' >"$d_bootstrap/.claude/agents/role.md"
-echo '{}' >"$d_bootstrap/.claude/state/state.json"
+echo '{}' >"$d_bootstrap/.mvp/state.json"
 write_msg "$d_bootstrap/msg.txt" "chore: bootstrap scope"
 run_finalize "$d_bootstrap" bootstrap msg.txt
 assert_eq "(preset bootstrap) exit code" "0" "$F_EXIT"
 
 d_plan="$(new_git_repo)"
-mkdir -p "$d_plan/.claude/state"
-echo '{}' >"$d_plan/.claude/state/plan.json"
+mkdir -p "$d_plan/.mvp"
+echo '{}' >"$d_plan/.mvp/plan.json"
 echo '# plan' >"$d_plan/docs/plan.md"
 write_msg "$d_plan/msg.txt" "chore: plan scope"
 run_finalize "$d_plan" plan msg.txt

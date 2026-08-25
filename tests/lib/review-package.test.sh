@@ -64,7 +64,7 @@ run_rp "$d_a" 001 --base "$BASE_A"
 assert_eq "(a) exit code" "0" "$RP_EXIT"
 assert_eq "(a) ok:true" "True" "$(json_field "$RP_OUT" 'd["ok"]')"
 PATH_A="$(json_field "$RP_OUT" 'd["data"]["path"]')"
-assert_eq "(a) path" ".claude/state/review/task-001.md" "$PATH_A"
+assert_eq "(a) path" ".mvp/review/task-001.md" "$PATH_A"
 
 FULL_PATH_A="$d_a/$PATH_A"
 if [ ! -f "$FULL_PATH_A" ]; then
@@ -162,11 +162,11 @@ else
   fi
 fi
 
-# --- (e) noise filter: lockfile name-only, .claude/state/** excluded, --------
+# --- (e) noise filter: lockfile name-only, .mvp/** excluded, --------
 #     normal untracked source file still inlined in full
 # Regression for the post-smoke finding: task-002's real package was 1442
 # lines, ~60% noise, because (1) the script's own PRIOR output under
-# .claude/state/review/ was untracked at listing time and got inlined into
+# .mvp/review/ was untracked at listing time and got inlined into
 # itself, and (2) package-lock.json (400+113 lines) was inlined whole.
 
 d_e="$(new_git_repo)"
@@ -177,10 +177,10 @@ BASE_E="$(cd "$d_e" && git rev-parse HEAD)"
 # untracked lockfile — must be named, never inlined
 echo '{"name": "whatever", "lockfileVersion": 3}' >"$d_e/package-lock.json"
 
-# untracked file under .claude/state/review/ — the script's own prior
+# untracked file under .mvp/review/ — the script's own prior
 # output (or any other state artifact) — must not appear at all
-mkdir -p "$d_e/.claude/state/review"
-echo 'SHOULD-NEVER-APPEAR-IN-PACKAGE' >"$d_e/.claude/state/review/task-001.md"
+mkdir -p "$d_e/.mvp/review"
+echo 'SHOULD-NEVER-APPEAR-IN-PACKAGE' >"$d_e/.mvp/review/task-001.md"
 
 # normal untracked source file — must still be inlined in full, unchanged
 echo 'REGULAR-SOURCE-CONTENT' >"$d_e/handler.py"
@@ -214,11 +214,11 @@ else
     fail=1
   fi
   if printf '%s' "$CONTENT_E" | grep -q "task-001.md"; then
-    echo "FAIL: (e) .claude/state/** file listed in package (must be excluded entirely)" >&2
+    echo "FAIL: (e) .mvp/** file listed in package (must be excluded entirely)" >&2
     fail=1
   fi
   if printf '%s' "$CONTENT_E" | grep -q "SHOULD-NEVER-APPEAR-IN-PACKAGE"; then
-    echo "FAIL: (e) .claude/state/** file content leaked into package" >&2
+    echo "FAIL: (e) .mvp/** file content leaked into package" >&2
     fail=1
   fi
 fi

@@ -19,7 +19,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh get phase
 
 ## Шаг 2 — телеметрия
 
-Прочитай `.claude/state/telemetry/events.jsonl`. Тип один — `task_complete`: `{"event","task","delta_tokens","controller_only","dispatches","ts"}`. Собери сумму, min/max/avg.
+Прочитай `.mvp/telemetry/events.jsonl`. Тип один — `task_complete`: `{"event","task","delta_tokens","controller_only","dispatches","ts"}`. Собери сумму, min/max/avg.
 
 **Ни одно поле тут не стоимость.** `delta_tokens` — взгляд контроллера, субагентов не видит (на vireo занизил в **8.4×**). `dispatches` — не прокси (корреляция −0.04), а **форма прогона**: 5 — чистый путь, 8 — лестница валидации. В $ не переводи.
 
@@ -33,7 +33,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh get phase
 
 ## Шаг 4 — observation-файл
 
-Путь: **`.claude/state/retro/<stamp>.md`**, `stamp` = `date -u +%Y-%m-%dT%H%M`. НЕ в `${CLAUDE_PLUGIN_ROOT}`: переустановка стёрла бы отчёт молча. Время в имени обязательно — два retro за день иначе перезапишут друг друга. Пиши через `Write`:
+Путь: **`.mvp/retro/<stamp>.md`**, `stamp` = `date -u +%Y-%m-%dT%H%M`. НЕ в `${CLAUDE_PLUGIN_ROOT}`: переустановка стёрла бы отчёт молча. Время в имени обязательно — два retro за день иначе перезапишут друг друга. Пиши через `Write`:
 
 ```markdown
 # Observations: <project> — <date>

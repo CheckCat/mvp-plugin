@@ -60,7 +60,7 @@ file you just wrote, suppress verbose tool output where possible.
 Re-run:
 
 ```
-bash .claude/state/ci-mirror.sh
+bash .mvp/ci-mirror.sh
 ```
 
 until it exits 0. You do NOT `git commit` — the pipeline's finalize step
@@ -116,4 +116,4 @@ FILES: <comma-separated list of files changed>
 - `{{TASK_ID}}` — the task being fixed
 - `{{BOUNDARY}}` — the task's service_path
 - `{{FINDINGS}}` — JSON array of findings from review, to fix
-- `{{REPORT_PATH}}` — `.claude/state/reports/task-{{TASK_ID}}.md`
+- `{{REPORT_PATH}}` — `.mvp/reports/task-{{TASK_ID}}.md`

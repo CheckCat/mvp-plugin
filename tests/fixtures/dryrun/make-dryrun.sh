@@ -8,7 +8,7 @@
 # ok:false always exits 1. Success: data = {"path": "<abs path to the repo>"}.
 #
 # The repo it builds:
-#   .claude/state/plan.json      — 2 tasks, role general-purpose,
+#   .mvp/plan.json      — 2 tasks, role general-purpose,
 #                                   complexity_class boilerplate, service_path
 #                                   "app", depends_on chained (002 -> 001) so
 #                                   the dry-run also exercises plan-io's
@@ -17,10 +17,10 @@
 #                                   file with fixed content — the simplest
 #                                   molecule an implementer agent can finish
 #                                   without judgment calls.
-#   .claude/state/ci-mirror.sh   — `true`: a CI mirror that always exits 0,
+#   .mvp/ci-mirror.sh   — `true`: a CI mirror that always exits 0,
 #                                   so validate-task.sh's ci-check never
 #                                   blocks the dry-run on a real toolchain.
-#   .claude/state/invariants.md  — minimal, non-empty (writeBrief() in
+#   .mvp/invariants.md  — minimal, non-empty (writeBrief() in
 #                                   plan-io.mjs embeds it verbatim into every
 #                                   task brief).
 # One initial commit, clean tree — the same baseline every plan-io.mjs test
@@ -64,9 +64,9 @@ if ! (cd "$DIR" && git config user.email dryrun@test.local && git config user.na
   fail "git config failed in $DIR"
 fi
 
-mkdir -p "$DIR/.claude/state" || fail "mkdir .claude/state failed"
+mkdir -p "$DIR/.mvp" || fail "mkdir .mvp failed"
 
-cat >"$DIR/.claude/state/plan.json" <<'EOF'
+cat >"$DIR/.mvp/plan.json" <<'EOF'
 {
   "tasks": [
     {
@@ -98,23 +98,23 @@ cat >"$DIR/.claude/state/plan.json" <<'EOF'
   ]
 }
 EOF
-[ -f "$DIR/.claude/state/plan.json" ] || fail "failed to write plan.json"
+[ -f "$DIR/.mvp/plan.json" ] || fail "failed to write plan.json"
 
-cat >"$DIR/.claude/state/ci-mirror.sh" <<'EOF'
+cat >"$DIR/.mvp/ci-mirror.sh" <<'EOF'
 #!/usr/bin/env bash
 true
 EOF
-chmod +x "$DIR/.claude/state/ci-mirror.sh"
+chmod +x "$DIR/.mvp/ci-mirror.sh"
 
-cat >"$DIR/.claude/state/invariants.md" <<'EOF'
+cat >"$DIR/.mvp/invariants.md" <<'EOF'
 # Project invariants (dry-run fixture)
 
 - Stack: none — synthetic smoke fixture for skills/build/workflow.mjs.
-- CI mirror: `bash .claude/state/ci-mirror.sh` (always exits 0).
+- CI mirror: `bash .mvp/ci-mirror.sh` (always exits 0).
 - Boundary: every task's files live under `app/`.
 EOF
 
-if ! (cd "$DIR" && git add .claude/state/plan.json .claude/state/ci-mirror.sh .claude/state/invariants.md); then
+if ! (cd "$DIR" && git add .mvp/plan.json .mvp/ci-mirror.sh .mvp/invariants.md); then
   fail "git add failed in $DIR"
 fi
 if ! (cd "$DIR" && git commit -q -m "chore: seed dryrun fixture"); then

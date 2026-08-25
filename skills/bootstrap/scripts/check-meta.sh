@@ -24,16 +24,16 @@
 #   5. architecture-forbidden-edge — an edge in docs/architecture.md's mermaid
 #                              diagram matches a FORBIDDEN_EDGE rule read
 #                              from --invariants (default:
-#                              .claude/state/invariants.md). Missing
+#                              .mvp/invariants.md). Missing
 #                              invariants file is NOT a violation of this
 #                              script (no rules to check yet is a valid
 #                              state before Step 3 of mvp:bootstrap writes
 #                              it) — it just means zero rules are checked.
 #   6. ci-mirror-missing / ci-mirror-empty / ci-mirror-syntax /
-#      ci-mirror-exec        — .claude/state/ci-mirror.sh must exist, contain
+#      ci-mirror-exec        — .mvp/ci-mirror.sh must exist, contain
 #                              something other than whitespace/comments, pass
 #                              `bash -n`, AND actually execute clean (`bash -e
-#                              .claude/state/ci-mirror.sh`, exit 0). This is
+#                              .mvp/ci-mirror.sh`, exit 0). This is
 #                              the ONLY other file mvp:bootstrap generates
 #                              that a later stage blindly executes:
 #                              lib/validate-task.sh runs it as the single
@@ -45,7 +45,7 @@
 #                              optional here: Step 3 of mvp:bootstrap writes
 #                              it before Step 6 ever runs, so its absence at
 #                              this point is a real bootstrap failure.
-#                              Path is fixed (.claude/state/ci-mirror.sh) —
+#                              Path is fixed (.mvp/ci-mirror.sh) —
 #                              validate-task.sh hardcodes the same literal,
 #                              so making it configurable here would only
 #                              allow the two to disagree. ci-mirror-exec is
@@ -109,7 +109,7 @@ fail() { # <reason> [hint]
 
 CLAUDE_MD="CLAUDE.md"
 ARCHITECTURE_MD="docs/architecture.md"
-INVARIANTS_MD=".claude/state/invariants.md"
+INVARIANTS_MD=".mvp/invariants.md"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -136,7 +136,7 @@ done
 
 # --- checks, all via one python3 call (env vars, never string-interpolated) -
 
-CI_MIRROR=".claude/state/ci-mirror.sh"
+CI_MIRROR=".mvp/ci-mirror.sh"
 
 RESULT="$(
   CM_CLAUDE_MD="$CLAUDE_MD" CM_ARCHITECTURE_MD="$ARCHITECTURE_MD" CM_INVARIANTS_MD="$INVARIANTS_MD" \
@@ -293,7 +293,7 @@ else:
 
 ok = len(violations) == 0
 reason = None if ok else f"{len(violations)} meta violation(s)"
-hint = None if ok else "fix CLAUDE.md/docs/architecture.md/.claude/state/ci-mirror.sh per data.violations and rerun check-meta.sh"
+hint = None if ok else "fix CLAUDE.md/docs/architecture.md/.mvp/ci-mirror.sh per data.violations and rerun check-meta.sh"
 print(json.dumps({"ok": ok, "reason": reason, "hint": hint, "data": {"violations": violations}}))
 '
 )"

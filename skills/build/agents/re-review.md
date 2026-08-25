@@ -55,7 +55,7 @@ argument.
 
 ## Do Not Trust the Report
 
-Read the fix report: `.claude/state/reports/task-{{TASK_ID}}.md`. Treat
+Read the fix report: `.mvp/reports/task-{{TASK_ID}}.md`. Treat
 everything appended to it as an unverified claim. Verify each `ADDRESSED`
 verdict against the diff itself, not against what the fix report says it
 did.

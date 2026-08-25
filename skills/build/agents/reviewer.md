@@ -29,7 +29,7 @@ requirements is the single failure this line exists to prevent.
 
 ## Do Not Trust the Report
 
-Read the implementer's report: `.claude/state/reports/task-{{TASK_ID}}.md`.
+Read the implementer's report: `.mvp/reports/task-{{TASK_ID}}.md`.
 Treat everything in it as unverified claims, not evidence — it may be
 incomplete, inaccurate, or optimistic. Verify every claim against the diff
 itself before relying on it. A stated rationale in the report ("kept it

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -eu
-STATE="${STATE_DIR:-.claude/state}/state.json"
+STATE="${STATE_DIR:-.mvp}/state.json"
 cmd="${1:-}"; shift || true
 case "$cmd" in
   init) mkdir -p "$(dirname "$STATE")"; [ -f "$STATE" ] || echo '{"phase":"brief"}' > "$STATE"

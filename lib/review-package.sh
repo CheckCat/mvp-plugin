@@ -2,7 +2,7 @@
 # review-package.sh <task-id> --base <sha>
 #
 # Writes a self-contained review bundle for one build task to
-# .claude/state/review/task-<task-id>.md: commits since base (if any),
+# .mvp/review/task-<task-id>.md: commits since base (if any),
 # diffstat + diff of BASE -> the CURRENT WORKING TREE (not HEAD — see
 # ruling below), and the full content of any new untracked files. Run from
 # the TARGET PROJECT root (not this plugin repo). Single-line JSON contract
@@ -43,10 +43,10 @@
 # NOISE FIX (post-smoke analysis, real task-002 artifact: 1442 lines, ~60%
 # noise): `git ls-files --others` runs BEFORE this script `mv`s its own
 # output into place, so a prior run's task-<id>.md under
-# .claude/state/review/ was untracked at listing time and got inlined into
+# .mvp/review/ was untracked at listing time and got inlined into
 # ITS OWN package — briefs/reports/review are already handed to the
 # reviewer via explicit paths, so self-inclusion here is pure noise, not a
-# feature. Fixed by excluding .claude/state/** from the untracked listing
+# feature. Fixed by excluding .mvp/** from the untracked listing
 # entirely. Separately, lock/generated files (package-lock.json and
 # friends) were being inlined whole — one such file alone was 400+113
 # lines in the smoke artifact. These are never hand-reviewed diffs a human
@@ -129,7 +129,7 @@ fi
 
 # --- write the review bundle ---------------------------------------------------
 
-OUT_DIR=".claude/state/review"
+OUT_DIR=".mvp/review"
 OUT_PATH="$OUT_DIR/task-${TASK_ID}.md"
 
 mkdir -p "$OUT_DIR"
@@ -162,7 +162,7 @@ trap 'rm -f "$TMP_OUT" "$TRUNC_FILE"' EXIT
 # Untracked files, NUL-delimited (filenames may contain spaces/special
 # chars) so paths cross the bash/python boundary intact — same pattern as
 # lib/validate-task.sh's boundary check. Two exceptions to "inline it all":
-#   - .claude/state/** is excluded entirely — briefs/reports/review are
+#   - .mvp/** is excluded entirely — briefs/reports/review are
 #     already handed to the reviewer via explicit paths; this is this
 #     script's own prior output (untracked until it `mv`s itself into
 #     place), so listing it here is self-inclusion, not review material.
@@ -179,10 +179,10 @@ data = sys.stdin.buffer.read()
 paths = [p.decode("utf-8", "replace") for p in data.split(b"\x00") if p]
 
 # self-inclusion bug (see header comment): this script'"'"'s own output lives
-# under .claude/state/review/ and is untracked until the final `mv` — never
-# list anything under .claude/state/** here.
-STATE_PREFIX = ".claude/state/"
-paths = [p for p in paths if p != ".claude/state" and not p.startswith(STATE_PREFIX)]
+# under .mvp/review/ and is untracked until the final `mv` — never
+# list anything under .mvp/** here.
+STATE_PREFIX = ".mvp/"
+paths = [p for p in paths if p != ".mvp" and not p.startswith(STATE_PREFIX)]
 
 LOCK_BASENAMES = {
     "package-lock.json", "uv.lock", "yarn.lock", "pnpm-lock.yaml",

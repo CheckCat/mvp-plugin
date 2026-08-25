@@ -21,7 +21,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh get phase
 
 По порядку, первое совпадение решает:
 
-1. `.claude/state/plan.json` есть и закоммичен (`git status --porcelain` по нему пуст) → `plan-done`.
+1. `.mvp/plan.json` есть и закоммичен (`git status --porcelain` по нему пуст) → `plan-done`.
 2. `CLAUDE.md` + `docs/architecture.md` есть → `bootstrap-done`.
 3. `docs/product/clarify-queue.jsonl` есть, у каждой записи `status=="applied"` → `clarify-done`.
 4. `docs/product/` есть (`business-logic.md`+`technical-solutions.md`) → `brief-done`.
@@ -31,7 +31,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh get phase
 
 ## Шаг 3 — ledger-правило
 
-Строка `Task <id>: complete (<sha>)` в `.claude/state/ledger.md` = задача сделана. `plan-io.mjs next` берёт `status` из `plan.json` (не ledger), но раз строка есть — эта задача НЕ передиспатчится при рестарте mvp:build. Не предлагай оператору план/build заново.
+Строка `Task <id>: complete (<sha>)` в `.mvp/ledger.md` = задача сделана. `plan-io.mjs next` берёт `status` из `plan.json` (не ledger), но раз строка есть — эта задача НЕ передиспатчится при рестарте mvp:build. Не предлагай оператору план/build заново.
 
 ## Шаг 4 — таблица диспатча
 
@@ -52,7 +52,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/plan-io.mjs summary
 
 `data.failed == 0` → покажи прогресс (`data.done`/`data.total`), скажи что build стартует явной командой `mvp:build` — сама не дёргай.
 
-`data.failed > 0` → прошлый build встал в `stop-and-ask`. Прочитай `.claude/state/blockers.md` (контекст) и `.claude/state/decisions.log` (уже решено?). Для failed-id без записи — `AskUserQuestion` с этим контекстом. Реши, допиши `[task_id] решение — обоснование` в `decisions.log` (Write/Edit сама, не скрипт). При «переделать»:
+`data.failed > 0` → прошлый build встал в `stop-and-ask`. Прочитай `.mvp/blockers.md` (контекст) и `.mvp/decisions.log` (уже решено?). Для failed-id без записи — `AskUserQuestion` с этим контекстом. Реши, допиши `[task_id] решение — обоснование` в `decisions.log` (Write/Edit сама, не скрипт). При «переделать»:
 ```
 ${CLAUDE_PLUGIN_ROOT}/lib/plan-io.mjs set-status <id> pending
 ```

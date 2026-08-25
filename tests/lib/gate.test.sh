@@ -200,7 +200,7 @@ assert_eq "(11) plan wrong phase ok:false" "False" "$(json_field "$G_OUT" 'd["ok
 
 d12="$(new_project_dir)"
 (cd "$d12" && "$state" init >/dev/null && "$state" set phase bootstrap-done >/dev/null)
-(cd "$d12" && git init -q && mkdir -p .claude/state && echo '{}' >.claude/state/plan.json)
+(cd "$d12" && git init -q && mkdir -p .mvp && echo '{}' >.mvp/plan.json)
 run_gate "$d12" plan
 assert_eq "(12) plan finalize-plan exit code" "1" "$G_EXIT"
 assert_eq "(12) plan finalize-plan ok:false" "False" "$(json_field "$G_OUT" 'd["ok"]')"
@@ -224,9 +224,9 @@ d14="$(new_project_dir)"
   git init -q &&
   git config user.email test@test.local &&
   git config user.name test &&
-  mkdir -p .claude/state &&
-  echo '{}' >.claude/state/plan.json &&
-  git add .claude/state/plan.json .claude/state/state.json &&
+  mkdir -p .mvp &&
+  echo '{}' >.mvp/plan.json &&
+  git add .mvp/plan.json .mvp/state.json &&
   git commit -q -m "chore: test fixture"
 )
 run_gate "$d14" build
@@ -263,8 +263,8 @@ done
 
 d18="$(new_project_dir)"
 (cd "$d18" && "$state" init >/dev/null && "$state" set phase bootstrap-done >/dev/null)
-mkdir -p "$d18/.claude/state"
-echo '{}' >"$d18/.claude/state/plan.json"
+mkdir -p "$d18/.mvp"
+echo '{}' >"$d18/.mvp/plan.json"
 run_gate "$d18" plan
 assert_eq "(18) plan no-git exit code" "1" "$G_EXIT"
 assert_eq "(18) plan no-git ok:false" "False" "$(json_field "$G_OUT" 'd["ok"]')"
@@ -277,8 +277,8 @@ fi
 
 d19="$(new_project_dir)"
 (cd "$d19" && "$state" init >/dev/null && "$state" set phase plan-done >/dev/null)
-mkdir -p "$d19/.claude/state"
-echo '{}' >"$d19/.claude/state/plan.json"
+mkdir -p "$d19/.mvp"
+echo '{}' >"$d19/.mvp/plan.json"
 run_gate "$d19" build
 assert_eq "(19) build no-git exit code" "1" "$G_EXIT"
 assert_eq "(19) build no-git ok:false" "False" "$(json_field "$G_OUT" 'd["ok"]')"
