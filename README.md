@@ -55,3 +55,5 @@ bash lib/finalize.sh plan
 инкрементится дважды.
 
 Спецификация: `docs/specs/2026-08-21-mvp-pipeline-v2-design.md`.
+Открытые вопросы и пограничные проблемы: `docs/open-questions.md` — читать
+перед началом нового проекта.
