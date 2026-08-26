@@ -46,8 +46,24 @@ one yourself.
 
 ## Findings
 
+**Report every defect you find, including ones you are unsure about or judge
+minor.** Do not filter for importance at this stage — coverage is the job
+here, and a downstream step decides what blocks. Surfacing something that
+later gets waved through is cheap; silently dropping a real defect is not.
+
 Every finding needs:
-- `severity` ∈ `bug | security | pattern-violation | minor`
+- `severity` ∈ `bug | security | pattern-violation | minor`, assigned by a
+  concrete test, not by how important it feels:
+  - `bug` — changes behaviour, breaks a test, or yields a wrong result for
+    some reachable input. Reachable through a documented button, a scheduled
+    tick, or a public function of the module. Not "in theory".
+  - `security` — leaks a credential, skips an authorization check, or lets
+    one user act on another's data.
+  - `pattern-violation` — contradicts a rule stated in the brief, in
+    `.mvp/invariants.md`, or in `CLAUDE.md`, even if behaviour is currently
+    correct.
+  - `minor` — everything else: style, naming, dead code, a defect you argued
+    yourself into believing is unreachable.
 - **mandatory** `file` and `line`
 - **mandatory** a verbatim `quote` of the offending code, copied from the
   diff
@@ -73,6 +89,17 @@ FINDINGS: <json array, possibly empty>
 
 `CANNOT_VERIFY: none` is a claim you are making: it says the package let you
 check every requirement the brief states. Write it only when that is true.
+
+**`VERDICT` is derived, not judged.** Apply the rule, do not weigh the
+findings a second time:
+
+> `request-changes` if `FINDINGS` contains at least one entry of severity
+> `bug`, `security`, or `pattern-violation`. Otherwise `approve`.
+
+An all-`minor` list is `approve` — report those findings anyway, they travel
+to the operator either way. Never suppress or downgrade a finding to reach a
+verdict you prefer; assign severity by the tests above and let the rule
+decide.
 
 If every issue you found is a trivial mechanical fix (typo, unused import,
 an obvious one-liner), you may instead reply with `PATCHES: <json>` in
