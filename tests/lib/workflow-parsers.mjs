@@ -31,6 +31,7 @@ const WANTED = [
   'parseValidatorVerdict', 'parseReviewerVerdict', 'parseCannotVerify', 'parseReReview',
   'looksLikeEnvelope', 'coerceRelayFields',
   'declaredOnly', 'truncatedPaths', 'shQuote', 'isRepoRootBoundary',
+  'severityRank', 'findingKey', 'unionFindings',
 ];
 
 // extractFn: pull one top-level `function NAME(...) { ... }` out of the source.
@@ -199,6 +200,58 @@ checkTrue('root boundary: "./"', F.isRepoRootBoundary('./'));
 checkTrue('root boundary: trailing slashes', F.isRepoRootBoundary('.//'));
 checkTrue('root boundary: a service path is NOT root', !F.isRepoRootBoundary('services/api'));
 checkTrue('root boundary: a dotted path is NOT root', !F.isRepoRootBoundary('./services/api'));
+
+// --- severityRank / findingKey / unionFindings ------------------------------
+// Polling the reviewer k times and unioning the findings is the fix for the
+// measured failure of the one-poll gate: over 28 real review packages polled
+// three times each, 8 of 9 distinct blocking defects were raised by exactly
+// one poll. These three functions are the whole of that union, so a bug here
+// silently reverts the gate to one poll's worth of coverage.
+
+const poll = (kind, verdict, findings) => ({ verdict: { kind, verdict, findings } });
+
+check('severityRank: security outranks bug', F.severityRank({ severity: 'security' }) > F.severityRank({ severity: 'bug' }), true);
+check('severityRank: bug outranks pattern-violation', F.severityRank({ severity: 'bug' }) > F.severityRank({ severity: 'pattern-violation' }), true);
+check('severityRank: pattern-violation outranks minor', F.severityRank({ severity: 'pattern-violation' }) > F.severityRank({ severity: 'minor' }), true);
+check('severityRank: unknown severity ranks 0', F.severityRank({ severity: 'whatever' }), 0);
+check('severityRank: missing severity ranks 0', F.severityRank({}), 0);
+check('severityRank: case-insensitive', F.severityRank({ severity: 'BUG' }), F.severityRank({ severity: 'bug' }));
+
+check('findingKey: same file and line collide', F.findingKey({ file: 'a/b.py', line: 42 }), F.findingKey({ file: 'A/B.py', line: 42 }));
+checkTrue('findingKey: different lines do NOT collide', F.findingKey({ file: 'a.py', line: 1 }) !== F.findingKey({ file: 'a.py', line: 2 }));
+checkTrue('findingKey: different files do NOT collide', F.findingKey({ file: 'a.py', line: 1 }) !== F.findingKey({ file: 'b.py', line: 1 }));
+checkTrue('findingKey: two file-less findings with different summaries do NOT collide',
+  F.findingKey({ summary: 'one thing' }) !== F.findingKey({ summary: 'another thing' }));
+check('findingKey: a non-numeric line degrades to the file alone',
+  F.findingKey({ file: 'a.py', line: 'x' }), F.findingKey({ file: 'a.py' }));
+
+// The real measured case: task 027 of the replay. Two polls called the leaked
+// db engine `minor`, the third called the same line a `bug`. Downgrading it
+// would have turned a blocking finding into an advisory one.
+const t027 = F.unionFindings([
+  poll('verdict', 'approve', [{ severity: 'minor', file: '__main__.py', line: 66, summary: 'leaks the engine' }]),
+  poll('verdict', 'approve', [{ severity: 'minor', file: '__main__.py', line: 66, summary: 'same, worded differently' }]),
+  poll('verdict', 'request-changes', [{ severity: 'bug', file: '__main__.py', line: 66, summary: 'same defect' }]),
+]);
+check('union: one defect seen by three polls stays one finding', t027.length, 1);
+check('union: the most severe reading wins', t027[0].severity, 'bug');
+
+// The dominant case: eight of nine defects were seen by exactly one poll.
+const spread = F.unionFindings([
+  poll('verdict', 'request-changes', [{ severity: 'bug', file: 'a.py', line: 1, summary: 'a' }]),
+  poll('verdict', 'approve', []),
+  poll('verdict', 'request-changes', [{ severity: 'pattern-violation', file: 'b.py', line: 2, summary: 'b' }]),
+]);
+check('union: minority findings from different polls all survive', spread.length, 2);
+
+check('union: no polls -> no findings', F.unionFindings([]).length, 0);
+check('union: every poll approved with nothing -> no findings',
+  F.unionFindings([poll('verdict', 'approve', []), poll('verdict', 'approve', [])]).length, 0);
+check('union: a PATCHES poll contributes no findings',
+  F.unionFindings([{ verdict: { kind: 'patches', patches: [{ file: 'a.py' }] } }]).length, 0);
+check('union: junk inside FINDINGS is skipped, not crashed on',
+  F.unionFindings([poll('verdict', 'request-changes', ['nonsense', null, 7, { severity: 'bug', file: 'a.py', line: 1 }])]).length, 1);
+checkTrue('union: a null poll does not throw', F.unionFindings([null, poll('verdict', 'approve', [])]).length === 0);
 
 if (failures) {
   console.error(`\n${failures} assertion(s) failed`);

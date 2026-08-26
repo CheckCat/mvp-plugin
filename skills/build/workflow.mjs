@@ -463,6 +463,19 @@ export const meta = {
 
 const IMPLEMENTER_RETRY_CAP = 1; // one implementer retry after a validator "retry" verdict
 const TOTAL_ATTEMPTS_CAP = 2; // 1 initial implementer dispatch + at most 1 retry
+
+// REVIEW_SAMPLES: how many times the reviewer is polled on the same package.
+// Not a retry cap — every poll runs regardless of what the previous one said,
+// and their findings are unioned (see unionFindings). 3 is a measured floor,
+// not a round number: across all 28 of this project's real review packages,
+// polled three times each (docs/plans/2026-08-26-E1-results.md), 8 of the 9
+// distinct blocking defects were raised by exactly ONE poll. Two polls would
+// have missed roughly a third of them. Whether a fourth poll pays for itself
+// is untested — the measurement says only that the second and third are not
+// optional. Costs ~14% of a run's budget at the $0.24/poll measured there;
+// what one poll cost was 0 blocked tasks out of 28 while eleven real defects
+// shipped.
+const REVIEW_SAMPLES = 3;
 // RE_REVIEW_CYCLES_CAP = 1 (one fix -> re-review pass, never repeated) has no
 // dedicated constant: runReviewLadder() below is written as a single
 // straight-line pass with no loop, so the cap is structural, not a runtime
@@ -955,6 +968,62 @@ function parseReReview(text) {
   return Array.isArray(findings.value) ? findings.value : [];
 }
 
+// SEVERITY_RANK: higher wins when the same defect is reported by more than one
+// poll at different severities. Measured case (task 027 of the glotok replay):
+// two polls called the leaked db engine `minor`, the third called it a `bug`.
+// Taking the max is not optimism about the reviewer — it is the same rule
+// reviewer.md already states for the verdict, applied across polls: anything
+// blocking blocks, and a defect nobody has to argue down stays argued up.
+function severityRank(f) {
+  // The table lives inside the function rather than beside it so the whole
+  // rule can be lifted out by tests/lib/workflow-parsers.mjs, which extracts
+  // top-level `function` declarations and nothing else.
+  const rank = { security: 4, bug: 3, 'pattern-violation': 2, minor: 1 };
+  return rank[String((f && f.severity) || '').toLowerCase()] || 0;
+}
+
+// findingKey(f) -> the identity two polls must share to be "the same defect".
+//
+// (file, line) and nothing else. Deliberately mechanical: matching on summary
+// text would need the workflow to judge whether two sentences mean the same
+// thing, which is exactly the kind of decision the Iron Law keeps out of
+// scripts. The cost of being wrong is asymmetric and cheap in one direction:
+// splitting one defect into two findings costs a redundant line in the fix
+// prompt, while merging two real defects into one loses a defect outright.
+// A reply that omits `file` (reviewer.md requires it, nothing enforces it)
+// falls back to the summary so those never collapse onto each other.
+function findingKey(f) {
+  const file = String((f && f.file) || '').trim().toLowerCase();
+  if (!file) return `nofile:${String((f && f.summary) || '').trim().slice(0, 80).toLowerCase()}`;
+  const raw = Number(f && f.line);
+  return `${file}:${Number.isFinite(raw) ? raw : ''}`;
+}
+
+// unionFindings(polls) -> every distinct finding any poll raised, deduped by
+// findingKey, most severe wins.
+//
+// This is the whole point of polling more than once. Measured 2026-08-26 over
+// all 28 of this project's real review packages, three polls each
+// (docs/plans/2026-08-26-E1-results.md): nine distinct blocking defects, of
+// which exactly ONE was seen by all three polls — the other eight surfaced in
+// a single poll and were invisible to the other two. Seven of the nine were
+// confirmed real, three of those by a failing test. A single poll therefore
+// finds a given defect roughly a third of the time, which is how the live run
+// blocked 0 of 28 tasks while eleven real defects shipped.
+function unionFindings(polls) {
+  const byKey = new Map();
+  for (const p of polls) {
+    if (!p || !p.verdict || p.verdict.kind !== 'verdict') continue;
+    for (const f of p.verdict.findings || []) {
+      if (!f || typeof f !== 'object') continue;
+      const key = findingKey(f);
+      const seen = byKey.get(key);
+      if (!seen || severityRank(f) > severityRank(seen)) byKey.set(key, f);
+    }
+  }
+  return [...byKey.values()];
+}
+
 // --- patches application (shared by the validate and review ladders) ---------
 
 // applyPatchesFlow: the workflow writes patches.json itself, via a dedicated
@@ -1129,54 +1198,87 @@ async function runReviewLadder(ctx) {
     };
   }
 
-  const reviewText = await agentText(
-    reviewerPrompt({ taskId: ctx.id, briefPath: ctx.briefPath, packagePath: rp.data.path }),
-    { model: 'sonnet', phase: 'Review', label: `reviewer-${ctx.id}` },
-  );
-  // CANNOT_VERIFY: reviewer.md already told reviewers to flag requirements
-  // they could not check against the diff, and they did — but nothing acted
-  // on it, so an `approve` issued over the top of "I could not verify the
-  // OAuth state validation" was indistinguishable from a clean one. The
-  // reviewer now declares it on its own line and it is a halt, not prose.
-  const cannotVerify = parseCannotVerify(reviewText);
-  if (cannotVerify) {
+  // The reviewer is polled REVIEW_SAMPLES times on the SAME package and the
+  // findings are the union — see unionFindings() for the measurement that
+  // forced this. One poll used to be the whole gate.
+  const polls = [];
+  for (let i = 1; i <= REVIEW_SAMPLES; i += 1) {
+    const label = `reviewer-${ctx.id}-${i}`;
+    // Sequential, not Promise.all. `agent` is injected by the host runtime and
+    // nothing in this sandbox's contract promises it is re-entrant; the gate
+    // every task passes through is not the place to find out. The obvious
+    // optimisation once that is pinned down — the polls are independent by
+    // construction, they read one immutable package.
+    const text = await agentText(
+      reviewerPrompt({ taskId: ctx.id, briefPath: ctx.briefPath, packagePath: rp.data.path }),
+      { model: 'sonnet', phase: 'Review', label },
+    );
+    // Persisted BEFORE it is parsed: the reply is evidence whatever the parser
+    // then makes of it, and an unparseable one is precisely the reply worth
+    // keeping. See lib/save-review.sh for what went wrong when nothing was.
+    const saved = await relay(
+      `bash "${lib}/save-review.sh" "${ctx.id}" ${shQuote(label)} ${shQuote(text == null ? '' : text)}`,
+      { phase: 'Review', label: `save-review-${ctx.id}-${i}`, retryable: false },
+    );
+    if (!saved.ok) log(`save-review.sh failed for ${label}: ${saved.reason || 'unknown'}`);
+    polls.push({
+      label,
+      text,
+      cannotVerify: parseCannotVerify(text),
+      verdict: parseReviewerVerdict(text),
+    });
+  }
+
+  // CANNOT_VERIFY: reviewer.md tells reviewers to flag requirements they could
+  // not check against the package, and a verdict issued over unverifiable
+  // requirements is not a gate. It used to halt on ONE poll saying so, which
+  // with three polls is wrong in both directions: a single reviewer's inability
+  // to check something two others checked fine is noise, and the same reply
+  // regularly carries a real defect in prose that its own FINDINGS array missed
+  // (3 times in 84 replies) — parking threw that prose away with the task.
+  // Now a MAJORITY halts, and a minority reaches the ledger as a concern so a
+  // human reads the prose either way.
+  const blind = polls.filter((p) => p.cannotVerify);
+  if (blind.length * 2 > REVIEW_SAMPLES) {
     return {
       parked: true,
-      why: `reviewer could not verify part of this task against the package: ${cannotVerify}. `
+      why: `${blind.length} of ${REVIEW_SAMPLES} reviewers could not verify part of this task against the package: `
+        + `${blind.map((p) => p.cannotVerify).join(' | ')}. `
         + 'A verdict issued over unverifiable requirements is not a gate — give the reviewer what it needs, or split the task.',
     };
   }
-
-  const verdict = parseReviewerVerdict(reviewText);
-
-  if (verdict.kind === 'patches') {
-    // Reviewer judged every finding trivial-mechanical: apply directly, no
-    // fix-dispatch / re-review round (per agents/reviewer.md's own contract).
-    // A failed apply here has no re-validate step to catch it (unlike the
-    // validate-ladder's patches path) — park directly (fix round item 6).
-    const applyResult = await applyPatchesFlow(ctx.id, verdict.patches, 'Review');
-    if (!applyResult.ok) {
-      return { parked: true, why: `review PATCHES apply failed: ${JSON.stringify(applyResult.data)}` };
-    }
-    return { parked: false };
-  }
-  if (verdict.verdict === 'approve') {
-    return { parked: false };
+  for (const p of blind) {
+    ctx.concerns.push(
+      `${p.label} could not verify part of this task (${REVIEW_SAMPLES - blind.length} of ${REVIEW_SAMPLES} polls could), `
+      + `read its prose for a defect its FINDINGS may have missed: ${p.cannotVerify}`,
+    );
   }
 
-  // request-changes with no usable findings: the reply is malformed, not a
-  // judgement we can act on — fix.md has nothing to work from. Re-ask the
-  // reviewer ONCE for a correctly encoded restatement before giving up
-  // (see reviewerRetryPrompt for why: a bad turn in the gate should not cost
-  // a whole task's implementation). A second failure parks, as before.
-  if (!verdict.findings || verdict.findings.length === 0) {
+  let findings = unionFindings(polls);
+  const patchPolls = polls.filter((p) => p.verdict.kind === 'patches');
+  const blockedPolls = polls.filter((p) => p.verdict.kind === 'verdict' && p.verdict.verdict === 'request-changes');
+
+  if (findings.length === 0 && blockedPolls.length > 0 && patchPolls.length === 0) {
+    // Every poll that wanted to block emitted an empty or unparseable FINDINGS:
+    // a malformed reply, not a judgement fix.md can work from. Re-ask ONCE for
+    // a correctly encoded restatement (see reviewerRetryPrompt) before giving
+    // up — a bad turn in the gate should not cost a whole task's
+    // implementation. Only reached when NO poll produced usable findings; one
+    // that did makes the retry pointless, which is the second thing polling
+    // more than once buys.
+    const label = `reviewer-retry-${ctx.id}`;
     const retryText = await agentText(
       reviewerRetryPrompt(
         reviewerPrompt({ taskId: ctx.id, briefPath: ctx.briefPath, packagePath: rp.data.path }),
-        reviewText,
+        blockedPolls[0].text,
       ),
-      { model: 'sonnet', phase: 'Review', label: `reviewer-retry-${ctx.id}` },
+      { model: 'sonnet', phase: 'Review', label },
     );
+    const savedRetry = await relay(
+      `bash "${lib}/save-review.sh" "${ctx.id}" ${shQuote(label)} ${shQuote(retryText == null ? '' : retryText)}`,
+      { phase: 'Review', label: `save-review-${ctx.id}-retry`, retryable: false },
+    );
+    if (!savedRetry.ok) log(`save-review.sh failed for ${label}: ${savedRetry.reason || 'unknown'}`);
     const retryVerdict = parseReviewerVerdict(retryText);
 
     // The restated reply is judged on its own terms — including the escape
@@ -1190,23 +1292,54 @@ async function runReviewLadder(ctx) {
       return { parked: false };
     }
     if (retryVerdict.verdict === 'approve') {
-      ctx.concerns.push('reviewer first reply was unparseable; restated verdict was approve');
+      ctx.concerns.push(`${blockedPolls.length} of ${REVIEW_SAMPLES} polls were unparseable; restated verdict was approve`);
       return { parked: false };
     }
     if (!retryVerdict.findings || retryVerdict.findings.length === 0) {
       return {
         parked: true,
-        why: 'reviewer VERDICT: request-changes but FINDINGS was empty or unparseable twice (original + one retry) — '
+        why: 'reviewer VERDICT: request-changes but FINDINGS was empty or unparseable in every poll and in the retry — '
           + `raw reply: ${(retryText || '').slice(0, 400)}`,
       };
     }
-    verdict.findings = retryVerdict.findings;
-    ctx.concerns.push('reviewer first reply was unparseable; findings taken from the restated reply');
+    findings = retryVerdict.findings;
+    ctx.concerns.push(`${blockedPolls.length} of ${REVIEW_SAMPLES} polls were unparseable; findings taken from the restated reply`);
+  }
+
+  if (findings.length === 0) {
+    if (patchPolls.length > 0) {
+      // No poll raised a finding and at least one judged everything it saw
+      // trivial-mechanical: apply the union of their patches, no fix-dispatch
+      // / re-review round (per agents/reviewer.md's own contract). A failed
+      // apply here has no re-validate step to catch it (unlike the
+      // validate-ladder's patches path) — park directly (fix round item 6).
+      const patches = patchPolls.flatMap((p) => p.verdict.patches || []);
+      const applyResult = await applyPatchesFlow(ctx.id, patches, 'Review');
+      if (!applyResult.ok) {
+        return { parked: true, why: `review PATCHES apply failed: ${JSON.stringify(applyResult.data)}` };
+      }
+      return { parked: false };
+    }
+    return { parked: false };
+  }
+
+  // A patches poll alongside real findings is not lost, it is superseded: the
+  // fix round rewrites the same code with more context than a search/replace
+  // pair carries, so applying both would race the fix agent against itself.
+  if (patchPolls.length > 0) {
+    ctx.concerns.push(
+      `${patchPolls.length} of ${REVIEW_SAMPLES} polls offered trivial PATCHES; superseded by the fix round because other polls raised real findings`,
+    );
+  }
+  if (findings.length > 0 && polls.some((p) => p.verdict.kind === 'verdict' && p.verdict.verdict === 'approve')) {
+    ctx.concerns.push(
+      `review split: ${findings.length} finding(s) came from a minority of ${REVIEW_SAMPLES} polls — the others approved`,
+    );
   }
 
   // request-changes with real findings: exactly one fix -> re-review cycle.
   const fixText = await dispatchAgentText(
-    fixPrompt({ taskId: ctx.id, boundary: ctx.boundary, findings: verdict.findings, reportPath: ctx.reportPath }),
+    fixPrompt({ taskId: ctx.id, boundary: ctx.boundary, findings, reportPath: ctx.reportPath }),
     { model: 'sonnet', phase: 'Review', label: `fix-${ctx.id}`, agentType: ctx.agentType },
   );
   if (fixText == null) {
@@ -1229,7 +1362,7 @@ async function runReviewLadder(ctx) {
   }
 
   const reReviewText = await agentText(
-    reReviewPrompt({ taskId: ctx.id, packagePath: rp.data.path, findings: verdict.findings }),
+    reReviewPrompt({ taskId: ctx.id, packagePath: rp.data.path, findings }),
     { model: 'sonnet', phase: 'Review', label: `re-review-${ctx.id}` },
   );
   if (reReviewText == null) {
