@@ -269,6 +269,29 @@ gate_build() {
     emit_result false "$reason" "run gate plan / mvp:plan first" ""
     exit 1
   fi
+
+  # Every role the plan dispatches must have an assembled agent file. This
+  # catches a skipped/partial mvp:bootstrap; it CANNOT catch the other half of
+  # the problem — agent types register when a Claude Code session starts, so
+  # files written by a bootstrap in the current session exist here and still do
+  # not dispatch. workflow.mjs raises that one as a per-task concern.
+  local missing_roles
+  missing_roles="$(python3 - "$planfile" <<'PY' 2>/dev/null
+import json, os, sys
+try:
+    tasks = json.load(open(sys.argv[1], encoding="utf-8")).get("tasks", [])
+except Exception:
+    sys.exit(0)
+roles = sorted({t.get("role") for t in tasks if t.get("role")})
+print(",".join(r for r in roles if not os.path.isfile(f".claude/agents/{r}.md")))
+PY
+)"
+  if [ -n "$missing_roles" ]; then
+    emit_result false "no agent file for role(s): $missing_roles" \
+      "rerun mvp:bootstrap step 4 (assemble-agent.sh) for each missing role" ""
+    exit 1
+  fi
+
   emit_result true "" "" ""
   exit 0
 }

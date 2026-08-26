@@ -708,10 +708,20 @@ async function dispatchAgentText(prompt, { model, phase, label, agentType }) {
   let res = await attempt(agentType);
   if (res == null) {
     log(`agent dispatch with agentType=${agentType} returned no result (dead/unknown agentType or a throw); retrying as general-purpose`);
+    agentTypeFallbacks.add(agentType);
     res = await attempt('general-purpose');
   }
   return res;
 }
+
+// agentTypes that had to fall back to general-purpose this run. The fallback
+// used to be visible only in the narrator log, so a whole run could execute
+// without the stack-specific agents mvp:bootstrap assembled — no _common.md
+// contract, no boundary rules — and review would still approve it. Agents are
+// registered when a Claude Code session starts, so a bootstrap in THIS session
+// produces files that are not dispatchable until the next one. Surfaced as a
+// per-task concern (see runOneTask) so it reaches ledger.md, not just the log.
+const agentTypeFallbacks = new Set();
 
 // --- prompt builders (template self-read — see design note 3) ----------------
 
@@ -1386,11 +1396,21 @@ async function park(id, boundary, why) {
 
 // --- one task ---------------------------------------------------------------------
 
+// The task currently mid-flight, or null between tasks. Read only by the
+// global catch below: a throw anywhere in the ladder used to return
+// `halt:'error'` with the implementer's half-finished files still in the
+// working tree and the task still `pending`, so plan state and tree state
+// disagreed and the next run halted on `dirty-tree`. Observed three times on
+// glotok (session limit, 403) — each time the operator had to reconstruct by
+// hand which task had been in flight.
+let inFlightTask = null;
+
 async function runOneTask(adv) {
   const id = adv.data.task_id;
   const briefPath = adv.data.brief_path;
   const boundary = adv.data.boundary;
   const role = adv.data.role;
+  inFlightTask = { id, boundary };
   const modelClass = adv.data.model_class;
   const declaredFiles = Array.isArray(adv.data.files) ? adv.data.files : [];
   const filesCsv = declaredFiles.join(',');
@@ -1447,11 +1467,24 @@ async function runOneTask(adv) {
   // the moment the count is taken.
   const dispatches = dispatchCount - dispatchesBefore + 1;
 
+  // A silent degradation is worse than a loud one: without this the task ships
+  // with `approve` and nothing records that the role's agent never ran.
+  if (agentTypeFallbacks.has(role)) {
+    ctx.concerns.push(
+      `agentType "${role}" did not dispatch — this task ran on general-purpose, WITHOUT the ` +
+        `_common.md contract (boundary rules, report format, blocker protocol) that ` +
+        `mvp:bootstrap assembled for it. Agents register at session start, so a bootstrap ` +
+        `run in this same session yields files that are not dispatchable until the next one. ` +
+        `Restart the session and re-run this task if the role's rules mattered.`,
+    );
+  }
+
   const sha = await finalize(id, boundary, tokensDelta, dispatches, ctx.concerns, 'Finalize');
 
   // concerns still travel in the return value for the SKILL's run summary,
   // but they are no longer the SKILL's responsibility to persist — finalize()
   // hands them to plan-io, which writes them into ledger.md.
+  inFlightTask = null;
   return { done: true, task_id: id, sha, tokens_delta: tokensDelta, dispatches, concerns: ctx.concerns };
 }
 
@@ -1601,5 +1634,29 @@ try {
   return withRunLabels({ halt: null, tasks_done: tasksDone, results });
 } catch (e) {
   log(`workflow error: ${e && e.stack ? e.stack : e}`);
-  return withRunLabels({ halt: 'error', detail: e && e.message ? e.message : String(e) });
+  const payload = { halt: 'error', detail: e && e.message ? e.message : String(e) };
+
+  // Try to leave the tree consistent with the plan. This runtime has no
+  // filesystem or shell of its own — every side effect is a dispatched agent —
+  // so recovery travels the same channel that just failed and may fail with
+  // it. That is precisely why the outcome is reported instead of assumed:
+  // on glotok `park-status-014` and `park-clean-021` both died of the same
+  // session limit as the task they were compensating for, and the operator
+  // discovered the dirty tree only on the next run's `dirty-tree` halt.
+  if (inFlightTask) {
+    payload.in_flight_task = inFlightTask.id;
+    try {
+      await park(inFlightTask.id, inFlightTask.boundary, payload.detail);
+      payload.recovery = 'parked';
+    } catch (parkErr) {
+      payload.recovery = 'failed';
+      payload.recovery_error = parkErr && parkErr.message ? parkErr.message : String(parkErr);
+      payload.detail =
+        `${payload.detail} — RECOVERY FAILED for task ${inFlightTask.id}: the working tree may still hold ` +
+        `unreviewed files under "${inFlightTask.boundary}" while the task is still pending. ` +
+        `Check "git status" and reset that boundary before the next run.`;
+    }
+    inFlightTask = null;
+  }
+  return withRunLabels(payload);
 }
