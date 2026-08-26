@@ -1376,8 +1376,16 @@ async function park(id, boundary, why) {
       `park: task ${id} boundary (${JSON.stringify(boundary)}) normalizes to the repo root — skipping the reset relay entirely (a repo-wide git checkout/restore/clean is irreversible and gets classifier-blocked); working tree left as-is for operator review`,
     );
   } else {
+    // vireo epoch 3 (2026-08-26): the old `git checkout/restore/clean` reset
+    // line was blocked by the platform safety classifier on every non-root
+    // park too (4 incidents), turning each clean stop-and-ask into an
+    // unhandled halt:'error' crash. `git stash push -u` wins on all axes:
+    // reversible (the classifier allows it), preserves the parked draft for
+    // diagnosis instead of destroying it, and leaves the tree clean for the
+    // next `plan-io next` dirty-check. The operator inspects/drops the stash.
+    // With nothing to stash it prints "No local changes to save" and exits 0.
     await relayLine(
-      `git checkout -- "${boundary}" 2>/dev/null; git restore --staged "${boundary}" 2>/dev/null; git clean -fd -e .mvp -- "${boundary}" 2>/dev/null; true`,
+      `git stash push -u -m "park task-${id}" -- "${boundary}" 2>/dev/null; true`,
       { phase: 'Finalize', label: `park-clean-${id}` },
     );
   }
