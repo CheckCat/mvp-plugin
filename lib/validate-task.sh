@@ -208,7 +208,17 @@ actual_excl_state = {f for f in seen if not under(f, ".mvp") and f not in exempt
 # One direction only (see the header): a file the plan promised and the task
 # did not produce. The reverse — files created but not listed — is normal and
 # was reported on 35 of 36 vireo tasks, which is noise, not signal.
-missing_declared = sorted(declared - actual_excl_state)
+#
+# exempt is subtracted from BOTH sides. It is already out of
+# actual_excl_state (line above), so without subtracting it here too, a file
+# that is both declared in the task files list and BOUNDARY_EXEMPT can never
+# pass: it is removed from what we saw but not from what we require. Observed
+# on glotok task 001 — pyproject.toml was declared, exempt, created and
+# committed, and still reported missing-declared on every run.
+#
+# NOTE: this python source is inside a single-quoted `python3 -c '...'`.
+# No apostrophes anywhere in it, comments included.
+missing_declared = sorted(declared - actual_excl_state - exempt)
 
 if missing_declared:
     violations.append({"check": "declared", "detail": "missing-declared: " + ", ".join(missing_declared)})

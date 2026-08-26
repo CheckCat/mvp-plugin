@@ -60,10 +60,11 @@ BOUNDARY_EXEMPT: <path>
 
 **3.2. `ci-mirror.sh`** — детерминированная генерация из `## Stack` brief'а. Читай `backend`/`frontend` ТЕМ ЖЕ способом, что `_extract_stack_value` в `skills/brief/scripts/package-brief.sh` (строки ~166–188: awk по `## Stack`, `- key: value`, case-insensitive key, первое совпадение побеждает) — replicate этот awk один в один для `backend` и для `frontend`, не изобретай новый формат парсинга.
 
-Маппинг стек → команды (пишутся в `.mvp/ci-mirror.sh`, по одной команде на строку — `validate-task.sh` гоняет их через `bash -e`, первая ошибка обрывает остальные). Каждая команда guarded своим предусловием: на пустом дереве зеркало обязано выходить 0 — это исполняемый гейт check-meta (Шаг 6 реально запускает `ci-mirror.sh`, не только `bash -n`).
+Маппинг стек → команды (пишутся в `.mvp/ci-mirror.sh`, по одной команде на строку). Каждая команда guarded своим предусловием: на пустом дереве зеркало обязано выходить 0 — это исполняемый гейт check-meta (Шаг 6 реально запускает `ci-mirror.sh`, не только `bash -n`). **`set -e` первой строкой**: иначе код возврата — от последней команды, и падение линта маскируется у всех, кто зовёт файл не через `bash -e`.
 
 `backend=fastapi`:
 ```
+set -e
 if [ -f pyproject.toml ]; then uv sync --frozen --all-packages; fi
 if [ -f pyproject.toml ]; then uv run ruff check .; fi
 if [ -f pyproject.toml ]; then uv run ruff format --check .; fi
@@ -74,6 +75,7 @@ Exit 5 значит «no tests collected» — ожидаемо на greenfield-
 
 `backend=nestjs`:
 ```
+set -e
 if [ -f package.json ]; then pnpm install --frozen-lockfile; fi
 if [ -f package.json ]; then pnpm turbo lint; fi
 if [ -f package.json ]; then pnpm turbo build; fi
