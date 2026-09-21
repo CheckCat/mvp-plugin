@@ -12,6 +12,7 @@
 #   clarify    = docs/product .mvp/state.json
 #   bootstrap  = CLAUDE.md docs/architecture.md .claude/agents .mvp
 #   plan       = .mvp docs/plan.md
+#   sync       = .claude/agents .mvp/plugin-lock.json
 #   build-task = --files (REQUIRED) + .mvp (always appended) +
 #                BOUNDARY_EXEMPT paths from .mvp/invariants.md, if
 #                any (always appended — workspace-shared artifacts a
@@ -38,7 +39,7 @@
 set -u
 
 USAGE="usage: finalize.sh <scope> <msg-file> [--files f1 f2 ...]"
-VALID_SCOPES="brief clarify bootstrap plan build-task"
+VALID_SCOPES="brief clarify bootstrap plan sync build-task"
 
 # emit_result <ok:true|false> <reason> <hint> <data-json>
 #   Same contract/pattern as lib/gate.sh: values are passed via env vars
@@ -67,7 +68,7 @@ SCOPE="${1:-}"
 MSG_FILE="${2:-}"
 
 case "$SCOPE" in
-  brief|clarify|bootstrap|plan|build-task) ;;
+  brief|clarify|bootstrap|plan|sync|build-task) ;;
   *) fail "unknown scope: ${SCOPE:-<missing>}" "$USAGE (scopes: $VALID_SCOPES)" ;;
 esac
 
@@ -100,6 +101,10 @@ case "$SCOPE" in
   clarify) PATHS=(docs/product .mvp/state.json) ;;
   bootstrap) PATHS=(CLAUDE.md docs/architecture.md .claude/agents .mvp) ;;
   plan) PATHS=(.mvp docs/plan.md) ;;
+  # Узко по построению: sync трогает только то, что сам чинит. Пресет
+  # bootstrap шире (CLAUDE.md, docs/architecture.md) и затащил бы в коммит
+  # несвязанные грязные файлы.
+  sync) PATHS=(.claude/agents .mvp/plugin-lock.json) ;;
   build-task) PATHS=("${FILES_ARG[@]}" .mvp) ;;
 esac
 
