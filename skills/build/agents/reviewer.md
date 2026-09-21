@@ -90,6 +90,16 @@ FINDINGS: <json array, possibly empty>
 `CANNOT_VERIFY: none` is a claim you are making: it says the package let you
 check every requirement the brief states. Write it only when that is true.
 
+When it IS true, the line must read exactly `CANNOT_VERIFY: none` and nothing
+else. Do not append how you checked, what you ran, or why you are confident —
+however useful that is, and it often is. The parser matches this value whole
+and on purpose: a prefix match would read "none of the auth checks are
+visible in this package" — a reviewer saying it verified NOTHING — as
+"nothing to report", opening the one gate whose entire job is to fail closed.
+So `none` plus a tail halts the task, and a reviewer who was more helpful than
+asked gets the task parked for it. Put everything you want to say in your
+prose above the block; it is saved verbatim and a human reads it.
+
 **`VERDICT` is derived, not judged.** Apply the rule, do not weigh the
 findings a second time:
 

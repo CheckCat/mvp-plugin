@@ -1275,11 +1275,27 @@ async function runReviewLadder(ctx) {
   // human reads the prose either way.
   const blind = polls.filter((p) => p.cannotVerify);
   if (blind.length * 2 > REVIEW_SAMPLES) {
+    // Name the format violation separately, because it is NOT the same halt.
+    // Measured (trellis task 019): of two polls counted blind, one had written
+    // `CANNOT_VERIFY: none — ran npm run test:e2e myself: 15/15 pass`, i.e. it
+    // had verified everything and appended how. parseCannotVerify matches the
+    // value whole — deliberately, see its comment — so that reply halts, and
+    // the operator then spends an hour deciding whether a real gap exists.
+    // The parser is not loosened here: `none of the auth checks are visible`
+    // must keep halting. What is fixed is that the halt now says which polls
+    // merely broke the format, so the distinction costs a glance, not a run.
+    const sloppy = blind.filter((p) => /^none\b/i.test(p.cannotVerify));
+    const note = sloppy.length
+      ? ` NOTE: ${sloppy.length} of these started with "none" and then added text — reviewer.md requires the bare word when `
+        + 'everything checked out, so this may be a reviewer that verified more than asked rather than less. Read those replies '
+        + `in .mvp/review/task-${ctx.id}.verdicts.md before assuming a gap: ${sloppy.map((p) => p.label).join(', ')}.`
+      : '';
     return {
       parked: true,
       why: `${blind.length} of ${REVIEW_SAMPLES} reviewers could not verify part of this task against the package: `
         + `${blind.map((p) => p.cannotVerify).join(' | ')}. `
-        + 'A verdict issued over unverifiable requirements is not a gate — give the reviewer what it needs, or split the task.',
+        + 'A verdict issued over unverifiable requirements is not a gate — give the reviewer what it needs, or split the task.'
+        + note,
     };
   }
   for (const p of blind) {

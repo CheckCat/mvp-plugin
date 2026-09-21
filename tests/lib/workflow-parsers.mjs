@@ -109,6 +109,25 @@ checkTrue(
   F.parseCannotVerify('CANNOT_VERIFY: none of the OAuth checks are visible in this package') !== null,
 );
 
+// The strictness above has a measured price, and it is paid deliberately.
+// trellis task 019: a reviewer answered
+//   CANNOT_VERIFY: none — ran `npm run test:e2e` myself ...: 15/15 subtests pass
+// i.e. it verified everything the brief asked AND said how. Whole-value
+// matching halts that reply, and the task was parked over a reviewer being
+// more helpful than required. Loosening the match is not the fix: the very
+// next case below is the reason, and it is one word apart. reviewer.md now
+// demands the bare word, and the halt message names polls whose value starts
+// with "none" so an operator can tell the two apart at a glance.
+checkTrue(
+  'cannot-verify: "none" with an appended justification still halts (deliberate, trellis 019)',
+  F.parseCannotVerify('CANNOT_VERIFY: none — ran `npm run test:e2e` myself: 15/15 subtests pass') !== null,
+);
+checkTrue(
+  'cannot-verify: "none of the ..." must keep halting — one word from the case above',
+  F.parseCannotVerify('CANNOT_VERIFY: none of the auth checks are visible in this package') !== null,
+);
+check('cannot-verify: bare none with a period -> null', F.parseCannotVerify('CANNOT_VERIFY: none.'), null);
+
 // --- extractField: an empty field must not swallow the next line -----------
 //
 // `\s` matches newlines (deliberately — a value on the next line still
