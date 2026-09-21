@@ -99,4 +99,72 @@ assert_eq "no arguments exits non-zero" "1" "$?"
 bad_no_label="$(bash "$sr" 021 2>/dev/null | tail -1)"
 assert_eq "missing label is ok:false" "false" "$(ok_of "$bad_no_label")"
 
+# --- --b64: the transport a RELAY AGENT cannot silently re-author -----------
+# The reply is the biggest free-text blob the pipeline moves, and it reaches
+# this script through an LLM asked to retype the command. Task 018 of the
+# trellis run proved that retyping is not guaranteed. Here the drift would be
+# silent — a mangled reply still appends — so the payload is one opaque ASCII
+# token whose declared byte length must match what decodes.
+b64_of() { # <text> -> "<byteLen>.<base64>"
+  python3 -c '
+import base64, sys
+b = sys.argv[1].encode("utf-8")
+print(f"{len(b)}.{base64.b64encode(b).decode()}")
+' "$1"
+}
+
+hostile='VERDICT: request-changes
+CANNOT_VERIFY: none — ran `npm run test:e2e` myself; $HOME "quoted" '"'"'single'"'"' ; rm -rf /
+FINDINGS: [{"severity":"bug","file":"start.ps1","line":318,"quote":"if ($id.Length -eq 0) {"}]
+кириллица и эмодзи 🚀'
+out_b64="$(bash "$sr" 030 "reviewer-030-1" --b64 "$(b64_of "$hostile")" | tail -1)"
+assert_eq "--b64 accepted" "true" "$(ok_of "$out_b64")"
+assert_contains "--b64 keeps the CANNOT_VERIFY line verbatim" "CANNOT_VERIFY: none — ran \`npm run test:e2e\` myself" ".mvp/review/task-030.verdicts.md"
+assert_contains "--b64 keeps embedded JSON verbatim" '"quote":"if ($id.Length -eq 0) {"' ".mvp/review/task-030.verdicts.md"
+assert_contains "--b64 keeps non-ascii verbatim" "кириллица и эмодзи 🚀" ".mvp/review/task-030.verdicts.md"
+[ -e "$work/pwned" ] && { echo "FAIL: --b64 injection executed" >&2; fail=1; }
+
+# byte-for-byte, not merely "contains": that is the whole claim of this path
+printf '%s\n' "$hostile" > "$work/expected-030.txt"
+python3 - "$work/expected-030.txt" .mvp/review/task-030.verdicts.md <<'PYEOF' || fail=1
+import sys
+expected = open(sys.argv[1], encoding="utf-8").read().rstrip("\n")
+saved = open(sys.argv[2], encoding="utf-8").read()
+start = saved.index("```\n") + 4
+end = saved.index("\n```", start)
+got = saved[start:end]
+if got != expected:
+    print(f"FAIL: --b64 round-trip is not byte-exact\n--- expected ---\n{expected}\n--- got ---\n{got}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+
+# a relay that drops the tail must fail the command, not save a shorter reply
+truncated="$(python3 -c '
+import base64
+b = "a reviewer reply the relay must not shorten".encode("utf-8")
+print(f"{len(b)}.{base64.b64encode(b[:-7]).decode()}")
+')"
+out_trunc="$(bash "$sr" 031 "reviewer-031-1" --b64 "$truncated" 2>/dev/null | tail -1)"
+assert_eq "truncated --b64 payload is refused" "false" "$(ok_of "$out_trunc")"
+case "$out_trunc" in
+  *"truncated in transit"*) ;;
+  *) echo "FAIL: refusal does not name the mismatch: $out_trunc" >&2; fail=1 ;;
+esac
+assert_eq "a refused payload writes no verdicts file" "0" \
+  "$([ -f .mvp/review/task-031.verdicts.md ] && echo 1 || echo 0)"
+
+out_garbage="$(bash "$sr" 032 "reviewer-032-1" --b64 "not-a-payload" 2>/dev/null | tail -1)"
+assert_eq "payload without a length prefix is refused" "false" "$(ok_of "$out_garbage")"
+out_missing="$(bash "$sr" 033 "reviewer-033-1" --b64 2>/dev/null | tail -1)"
+assert_eq "--b64 without a payload is refused" "false" "$(ok_of "$out_missing")"
+
+# an empty reply is still a fact worth recording, in either form
+out_empty="$(bash "$sr" 034 "reviewer-034-1" --b64 "$(b64_of "")" | tail -1)"
+assert_eq "empty --b64 reply accepted" "true" "$(ok_of "$out_empty")"
+assert_contains "empty --b64 reply recorded as such" "(no reply" ".mvp/review/task-034.verdicts.md"
+
+# the positional form still works — operators run this by hand during recovery
+bash "$sr" 035 "reviewer-035-1" "plain positional reply" >/dev/null
+assert_contains "positional form still supported" "plain positional reply" ".mvp/review/task-035.verdicts.md"
+
 exit "$fail"

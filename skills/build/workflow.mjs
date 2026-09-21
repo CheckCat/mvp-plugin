@@ -1217,7 +1217,7 @@ async function runReviewLadder(ctx) {
     // then makes of it, and an unparseable one is precisely the reply worth
     // keeping. See lib/save-review.sh for what went wrong when nothing was.
     const saved = await relay(
-      `bash "${lib}/save-review.sh" "${ctx.id}" ${shQuote(label)} ${shQuote(text == null ? '' : text)}`,
+      `bash "${lib}/save-review.sh" "${ctx.id}" ${shQuote(label)} --b64 ${b64Payload(text == null ? '' : text)}`,
       { phase: 'Review', label: `save-review-${ctx.id}-${i}`, retryable: false },
     );
     if (!saved.ok) log(`save-review.sh failed for ${label}: ${saved.reason || 'unknown'}`);
@@ -1275,7 +1275,7 @@ async function runReviewLadder(ctx) {
       { model: 'sonnet', phase: 'Review', label },
     );
     const savedRetry = await relay(
-      `bash "${lib}/save-review.sh" "${ctx.id}" ${shQuote(label)} ${shQuote(retryText == null ? '' : retryText)}`,
+      `bash "${lib}/save-review.sh" "${ctx.id}" ${shQuote(label)} --b64 ${b64Payload(retryText == null ? '' : retryText)}`,
       { phase: 'Review', label: `save-review-${ctx.id}-retry`, retryable: false },
     );
     if (!savedRetry.ok) log(`save-review.sh failed for ${label}: ${savedRetry.reason || 'unknown'}`);

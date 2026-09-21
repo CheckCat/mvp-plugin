@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # save-review.sh <task-id> <label> <raw-reply>
+# save-review.sh <task-id> <label> --b64 <byteLen>.<base64>
 #
 # Appends one reviewer's raw reply to .mvp/review/task-<task-id>.verdicts.md.
 # Run from the TARGET PROJECT root. Single-line JSON contract on every exit
@@ -23,10 +24,20 @@
 # array missed (measured: 3 times in 84 replies), and prose that a human will
 # read belongs in a format a human reads. finalize.sh commits .mvp/ with the
 # task, so this lands in the same commit as the package it judges.
+#
+# WHY --b64. The reply is the largest free-text blob in the pipeline (kilobytes
+# of reviewer prose, code quotes and JSON) and it reaches this script through a
+# RELAY AGENT that is asked to retype the command verbatim. On task 018 of the
+# trellis run the relay did not retype a smaller, quoted payload — it
+# re-authored the command and invented a flag. Here the same drift would be
+# SILENT: a mangled reply still appends, and the artifact whose only job is to
+# record what the reviewer actually said would be quietly wrong. The base64
+# form gives the relay one opaque ASCII token with nothing to improve, and the
+# byte-length prefix turns truncation into a refusal instead of a short file.
 
 set -u
 
-USAGE="usage: save-review.sh <task-id> <label> <raw-reply>"
+USAGE="usage: save-review.sh <task-id> <label> (<raw-reply> | --b64 <byteLen>.<base64>)"
 
 emit_result() {
   SR_OK="$1" SR_REASON="$2" SR_HINT="$3" SR_DATA="$4" python3 -c '
@@ -54,6 +65,50 @@ LABEL="${2:-}"
 # on disk instead of being indistinguishable from "nobody asked it".
 REPLY="${3-}"
 
+# --b64 decodes into a FILE, not a command substitution: $(...) strips trailing
+# newlines, and trimming whitespace inside a fix whose whole point is faithful
+# transport would be a poor joke. The file also keeps arbitrary bytes out of
+# any further shell handling.
+REPLY_FILE=""
+cleanup_reply_file() { [ -n "$REPLY_FILE" ] && rm -f "$REPLY_FILE" "$REPLY_FILE.err"; }
+trap cleanup_reply_file EXIT
+
+if [ "${3-}" = "--b64" ]; then
+  PAYLOAD="${4-}"
+  [ -n "$PAYLOAD" ] || fail "missing payload after --b64" "$USAGE"
+  REPLY_FILE="$(mktemp)" || fail "cannot create a temp file"
+  if ! SR_PAYLOAD="$PAYLOAD" SR_OUT="$REPLY_FILE" python3 -c '
+import base64, binascii, os, re, sys
+raw = os.environ["SR_PAYLOAD"]
+dot = raw.find(".")
+if dot <= 0:
+    sys.exit("payload must be \"<byteLen>.<base64>\"")
+try:
+    declared = int(raw[:dot])
+except ValueError:
+    sys.exit("payload length prefix is not an integer")
+if declared < 0:
+    sys.exit("payload length prefix is negative")
+b64 = raw[dot + 1:]
+if re.fullmatch(r"[A-Za-z0-9+/]*={0,2}", b64) is None:
+    sys.exit("payload is not base64")
+try:
+    data = base64.b64decode(b64, validate=True)
+except (binascii.Error, ValueError):
+    sys.exit("payload is not decodable base64")
+if len(data) != declared:
+    sys.exit(f"payload truncated in transit: declared {declared} bytes, decoded {len(data)}")
+if base64.b64encode(data).decode() != b64:
+    sys.exit("payload altered in transit: base64 is not canonical")
+with open(os.environ["SR_OUT"], "wb") as fh:
+    fh.write(data)
+' 2>"$REPLY_FILE.err"; then
+    DECODE_ERR="$(tail -n1 "$REPLY_FILE.err" 2>/dev/null)"
+    fail "${DECODE_ERR:-cannot decode --b64 payload}" \
+      "workflow.mjs builds this payload; a mismatch means the relay altered the command"
+  fi
+fi
+
 OUT_DIR=".mvp/review"
 OUT_PATH="$OUT_DIR/task-${TASK_ID}.verdicts.md"
 
@@ -66,7 +121,13 @@ fi
 
 {
   printf '\n## %s\n\n' "$LABEL"
-  if [ -z "$REPLY" ]; then
+  if [ -n "$REPLY_FILE" ]; then
+    if [ -s "$REPLY_FILE" ]; then
+      printf '```\n'; cat "$REPLY_FILE"; printf '\n```\n'
+    else
+      printf '(no reply — the dispatch returned nothing)\n'
+    fi
+  elif [ -z "$REPLY" ]; then
     printf '(no reply — the dispatch returned nothing)\n'
   else
     printf '```\n%s\n```\n' "$REPLY"
