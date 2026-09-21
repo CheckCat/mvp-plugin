@@ -292,6 +292,88 @@ PY
     exit 1
   fi
 
+  # --- plugin-lock: производное блокирует, нормативка только докладывается --
+  #
+  # Асимметрия намеренная (docs/specs/2026-09-21-plugin-lock-and-sync-design.md
+  # §7). derived блокирует, потому что цена известна: устаревшие агенты не
+  # регистрируются, задачи уходят на general-purpose без контракта _common.md,
+  # и ревью их одобряет — оно судит дифф, а не автора. Нормативка не
+  # блокирует, потому что иначе любой коммит в плагин останавливает все
+  # проекты сразу, и первое, чему научится оператор — обходить гейт.
+  #
+  # `check` возвращает ok:false на ЛЮБОЕ расхождение — он диагност, а не
+  # политика. Политика здесь.
+  # Спека §7: "lock_present: false" валит build, только если в проекте уже
+  # есть хоть один собранный агент (.claude/agents/*.md) — иначе сравнивать
+  # не с чем (§5.2), и это не отличается от "плагин ещё не использовался".
+  local agents_present="false"
+  compgen -G ".claude/agents/*.md" >/dev/null 2>&1 && agents_present="true"
+
+  local lock_json
+  lock_json="$("$here/plugin-lock.sh" check 2>/dev/null | tail -n1)"
+  local lock_verdict
+  lock_verdict="$(GB_J="$lock_json" GB_AGENTS_PRESENT="$agents_present" python3 -c '
+import json, os, sys
+raw = os.environ.get("GB_J") or ""
+try:
+    r = json.loads(raw)
+except ValueError:
+    # Скрипт не отдал контракт (нет python3? снесли файл?). Молча пропускать
+    # нельзя, но и валить build из-за сломанного диагноста — хуже: сам гейт
+    # тогда становится точкой отказа. Пропускаем, назвав причину.
+    print(json.dumps({"verdict": "skip", "reason": "plugin-lock.sh gave no JSON contract"}))
+    sys.exit(0)
+
+d = r.get("data") or {}
+if d.get("lock_present") is False:
+    if os.environ.get("GB_AGENTS_PRESENT") == "true":
+        print(json.dumps({"verdict": "halt",
+                          "reason": "no .mvp/plugin-lock.json — cannot tell if agents match the plugin"}))
+    else:
+        print(json.dumps({"verdict": "clean"}))
+    sys.exit(0)
+
+hard = []
+for key, label in (("derived_stale", "stale"), ("derived_tampered", "hand-edited"),
+                   ("derived_missing", "missing")):
+    for item in d.get(key) or []:
+        hard.append("%s(%s)" % (item.get("role"), label))
+if hard:
+    print(json.dumps({"verdict": "halt",
+                      "reason": "agent file(s) out of sync with plugin: " + ", ".join(sorted(hard))}))
+    sys.exit(0)
+
+soft = {k: d.get(k) or [] for k in ("normative_changed", "normative_added", "normative_removed")}
+if any(soft.values()):
+    print(json.dumps({"verdict": "warn", "data": soft}))
+    sys.exit(0)
+
+print(json.dumps({"verdict": "clean"}))
+')"
+
+  local lv
+  lv="$(GB_V="$lock_verdict" python3 -c 'import json,os; print(json.loads(os.environ["GB_V"])["verdict"])')"
+  if [ "$lv" = "halt" ]; then
+    local lock_reason
+    lock_reason="$(GB_V="$lock_verdict" python3 -c 'import json,os; print(json.loads(os.environ["GB_V"])["reason"])')"
+    emit_result false "$lock_reason" "run mvp:sync" ""
+    exit 1
+  fi
+  if [ "$lv" = "warn" ]; then
+    local lock_data
+    lock_data="$(GB_V="$lock_verdict" python3 -c 'import json,os; print(json.dumps(json.loads(os.environ["GB_V"])["data"]))')"
+    emit_result true "" "" "$lock_data"
+    exit 0
+  fi
+  if [ "$lv" = "skip" ]; then
+    # Не блокируем build за сломанный диагност, но и не пропускаем молча:
+    # причина обязана быть видна оператору хоть где-то (stderr — единственное
+    # доступное место, stdout зарезервирован под JSON-контракт).
+    local skip_reason
+    skip_reason="$(GB_V="$lock_verdict" python3 -c 'import json,os; print(json.loads(os.environ["GB_V"])["reason"])')"
+    echo "gate build: plugin-lock check skipped — $skip_reason" >&2
+  fi
+
   emit_result true "" "" ""
   exit 0
 }

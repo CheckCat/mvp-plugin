@@ -287,4 +287,100 @@ if ! echo "$G_OUT" | grep -qi "git"; then
   fail=1
 fi
 
+# --- plugin-lock: derived-дрейф валит gate build ------------------------
+# Асимметрия намеренная (спека §7): устаревшие агенты не регистрируются,
+# задачи уходят на general-purpose без контракта, и ревью это пропускает —
+# оно судит дифф, а не автора. Нормативка так не вредит и не блокирует.
+
+gl_proj="$tmproot/gate-lock-proj"
+gl_plugin="$tmproot/gate-lock-plugin"
+mkdir -p "$gl_plugin/skills/bootstrap/templates" "$gl_plugin/skills/build" \
+         "$gl_plugin/lib" "$gl_plugin/.claude-plugin"
+printf '%s\n' '{"name":"mvp","version":"9.9.9"}' > "$gl_plugin/.claude-plugin/plugin.json"
+printf 'COMMON v1\n' > "$gl_plugin/skills/bootstrap/templates/_common.md"
+printf -- '---\nname: devops-engineer\ndescription: d\ntools: Read\n---\n\nB\n' \
+  > "$gl_plugin/skills/bootstrap/templates/devops-engineer.docker-compose.fastify.template.md"
+printf 'SKILL build v1\n' > "$gl_plugin/skills/build/SKILL.md"
+printf 'echo hi\n' > "$gl_plugin/lib/validate-task.sh"
+
+# Проект, доведённый до состояния, в котором gate build проходит ВСЕ
+# предыдущие проверки: git-репо, закоммиченный plan.json, phase=plan-done,
+# агент на каждую роль плана.
+mkdir -p "$gl_proj/.claude/agents" "$gl_proj/.mvp"
+(cd "$gl_proj" && git init -q . && git config user.email t@t && git config user.name t)
+printf 'ASSEMBLED devops\n' > "$gl_proj/.claude/agents/devops-engineer.md"
+printf '%s\n' '{"tasks":[{"id":"001","role":"devops-engineer"}]}' > "$gl_proj/.mvp/plan.json"
+printf '%s\n' '{"phase":"plan-done"}' > "$gl_proj/.mvp/state.json"
+(cd "$gl_proj" && git add .mvp .claude && git commit -qm init)
+(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/plugin-lock.sh" \
+   record devops-engineer docker-compose.fastify >/dev/null 2>&1)
+(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/plugin-lock.sh" \
+   seal >/dev/null 2>&1)
+(cd "$gl_proj" && git add .mvp && git commit -qm lock)
+
+g_clean="$(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: чистый проект проходит" "True" "$(json_field "$g_clean" 'd["ok"]')"
+
+# derived-дрейф: правим _common.md в плагине
+printf 'COMMON v2\n' > "$gl_plugin/skills/bootstrap/templates/_common.md"
+g_stale="$(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: derived-дрейф валит" "False" "$(json_field "$g_stale" 'd["ok"]')"
+assert_eq "gate-lock: hint зовёт в mvp:sync" "run mvp:sync" "$(json_field "$g_stale" 'd["hint"]')"
+# ok:false в gate_build бывает по многим причинам (нет git, план не
+# закоммичен, нет агента под роль...) — hint уже различает их (см. выше), но
+# reason проверяем отдельной подстрокой, чтобы не спутать именно ЭТОТ halt
+# с любым другим источником ok:false.
+if ! echo "$g_stale" | grep -q "out of sync with plugin"; then
+  echo "FAIL: gate-lock: derived-дрейф reason не про рассинхрон с плагином: $g_stale" >&2
+  fail=1
+fi
+
+# Вернуть плагин, пересобрать отметку, испортить только нормативку
+printf 'COMMON v1\n' > "$gl_plugin/skills/bootstrap/templates/_common.md"
+printf 'SKILL build v2 — новое требование\n' > "$gl_plugin/skills/build/SKILL.md"
+g_norm="$(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: нормативка НЕ валит" "True" "$(json_field "$g_norm" 'd["ok"]')"
+assert_eq "gate-lock: нормативка попала в data" "skills/build/SKILL.md" \
+  "$(json_field "$g_norm" 'd["data"]["normative_changed"][0]')"
+
+# Отсутствие lock при наличии агентов — валит
+rm "$gl_proj/.mvp/plugin-lock.json"
+g_nolock="$(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: нет lock при наличии агентов — валит" "False" "$(json_field "$g_nolock" 'd["ok"]')"
+if ! echo "$g_nolock" | grep -q "no .mvp/plugin-lock.json"; then
+  echo "FAIL: gate-lock: нет-lock reason не про отсутствие lock-файла: $g_nolock" >&2
+  fail=1
+fi
+
+# Обратный контроль: отсутствие lock БЕЗ единого собранного агента — не
+# валит (спека §7: "сравнить не с чем" — это не дрейф). Отдельный свежий
+# проект, чтобы не зависеть от мутаций gl_proj выше по файлу.
+gl_proj_noagents="$tmproot/gate-lock-proj-noagents"
+mkdir -p "$gl_proj_noagents/.mvp"
+(cd "$gl_proj_noagents" && git init -q . && git config user.email t@t && git config user.name t)
+printf '%s\n' '{"tasks":[]}' > "$gl_proj_noagents/.mvp/plan.json"
+printf '%s\n' '{"phase":"plan-done"}' > "$gl_proj_noagents/.mvp/state.json"
+(cd "$gl_proj_noagents" && git add .mvp && git commit -qm init)
+g_noagents="$(cd "$gl_proj_noagents" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: нет lock и нет агентов — НЕ валит" "True" "$(json_field "$g_noagents" 'd["ok"]')"
+
+# --- plugin-lock: skip-ветка (plugin-lock.sh не отдал разбираемый JSON) --
+# Требование: гейт не должен сам стать точкой отказа (build остаётся
+# ok:true), но и не имеет права молча проглотить проблему — причина обязана
+# уйти хоть куда-то (stderr, раз stdout занят JSON-контрактом). Проверяем
+# обеими сторонами: ok:true И непустой релевантный stderr — по отдельности
+# каждая половина могла бы пройти при сломанной другой.
+gl_lib_broken="$tmproot/gate-lock-broken-lib"
+cp -r "$repo_root/lib" "$gl_lib_broken"
+printf '#!/usr/bin/env bash\necho "not valid json"\n' > "$gl_lib_broken/plugin-lock.sh"
+chmod +x "$gl_lib_broken/plugin-lock.sh"
+
+gl_skip_err="$tmproot/gate-lock-skip-stderr.txt"
+g_skip="$(cd "$gl_proj" && "$gl_lib_broken/gate.sh" build 2>"$gl_skip_err" | tail -n1)"
+assert_eq "gate-lock: skip-ветка не валит build" "True" "$(json_field "$g_skip" 'd["ok"]')"
+if ! grep -q "plugin-lock" "$gl_skip_err"; then
+  echo "FAIL: gate-lock: skip-ветка молчит на stderr: $(cat "$gl_skip_err")" >&2
+  fail=1
+fi
+
 exit $fail
