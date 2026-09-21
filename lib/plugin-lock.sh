@@ -146,6 +146,78 @@ print(json.dumps({"ok": True, "reason": None, "hint": None,
 '
     exit $?
     ;;
+  check)
+    PL_PLUGIN_ROOT="$PLUGIN_ROOT" PL_LOCK="$LOCK" python3 -c '
+import hashlib, json, os, pathlib, sys
+
+plugin_root = pathlib.Path(os.environ["PL_PLUGIN_ROOT"])
+lock_path   = pathlib.Path(os.environ["PL_LOCK"])
+
+def sha(path):
+    return "sha256:" + hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+
+empty = {
+    "lock_present": False,
+    "derived_stale": [], "derived_tampered": [], "derived_missing": [],
+    "normative_changed": [], "normative_added": [], "normative_removed": [],
+}
+
+try:
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+except FileNotFoundError:
+    print(json.dumps({"ok": False, "reason": "no plugin-lock.json",
+                      "hint": "run mvp:sync — the project has no plugin stamp to compare against",
+                      "data": empty}))
+    sys.exit(1)
+except ValueError:
+    print(json.dumps({"ok": False, "reason": "plugin-lock.json is not valid JSON",
+                      "hint": "delete it and run mvp:sync — it is regenerable",
+                      "data": empty}))
+    sys.exit(1)
+
+data = dict(empty, lock_present=True)
+
+for out_path, entry in sorted(lock.get("derived", {}).items()):
+    role  = entry.get("role")
+    stack = entry.get("stack", "")
+
+    changed = []
+    for src, want in sorted(entry.get("sources", {}).items()):
+        full = plugin_root / src
+        got = sha(full) if full.is_file() else None
+        if got != want:
+            changed.append(src)
+
+    if not os.path.isfile(out_path):
+        data["derived_missing"].append({"path": out_path, "role": role})
+        continue
+
+    if changed:
+        # Источник уехал — это "плагин обновился". Даже если артефакт вдобавок
+        # правили руками, лечение одно и то же (пересборка), поэтому второй
+        # диагноз здесь не добавляется: он был бы шумом, а не информацией.
+        data["derived_stale"].append({"path": out_path, "role": role,
+                                      "stack": stack, "changed_sources": changed})
+    elif sha(out_path) != entry.get("output_sha256"):
+        data["derived_tampered"].append({"path": out_path, "role": role, "stack": stack})
+
+problems = []
+if data["derived_stale"]:
+    problems.append("%d agent(s) stale vs plugin" % len(data["derived_stale"]))
+if data["derived_tampered"]:
+    problems.append("%d agent(s) hand-edited" % len(data["derived_tampered"]))
+if data["derived_missing"]:
+    problems.append("%d agent file(s) missing" % len(data["derived_missing"]))
+
+if problems:
+    print(json.dumps({"ok": False, "reason": "; ".join(problems),
+                      "hint": "run mvp:sync", "data": data}))
+    sys.exit(1)
+
+print(json.dumps({"ok": True, "reason": None, "hint": None, "data": data}))
+'
+    exit $?
+    ;;
   *)
     emit_result false "unknown cmd: ${cmd:-<missing>}" "record|check|seal" ""
     exit 1

@@ -130,4 +130,102 @@ assert_eq "test 9: stack сброшен" "" \
 assert_eq "test 9: template общий" "integration-specialist.template.md" \
   "$(jq_py "$lock9" 'd["derived"][".claude/agents/integration-specialist.md"]["template"]')"
 
+# --- Общая фикстура для check-тестов --------------------------------------
+# Плагин и проект с двумя записанными ролями. Каждый тест получает СВОЮ
+# копию: тесты мутируют шаблоны, общая фикстура склеила бы их между собой.
+make_recorded_pair() { # <prefix> -> печатает "<plugin-dir> <proj-dir>"
+  local p="$tmpdir/$1-plugin" j="$tmpdir/$1-proj"
+  make_fake_plugin "$p"; make_fake_project "$j"
+  printf 'ASSEMBLED devops\n' > "$j/.claude/agents/devops-engineer.md"
+  printf 'ASSEMBLED integ\n'  > "$j/.claude/agents/integration-specialist.md"
+  (cd "$j" && PLUGIN_ROOT="$p" bash "$LOCK_SH" record devops-engineer docker-compose.fastify >/dev/null 2>&1)
+  (cd "$j" && PLUGIN_ROOT="$p" bash "$LOCK_SH" record integration-specialist >/dev/null 2>&1)
+  printf '%s %s\n' "$p" "$j"
+}
+
+run_check() { # <plugin-dir> <proj-dir>
+  (cd "$2" && PLUGIN_ROOT="$1" bash "$LOCK_SH" check 2>/dev/null) | tail -n1
+}
+
+# --- Test 2 (часть 1): всё чисто ------------------------------------------
+
+read -r p2 j2 <<< "$(make_recorded_pair t2)"
+c2="$(run_check "$p2" "$j2")"
+assert_eq "test 2a: ok при чистом плагине" "True" "$(jq_py "$c2" 'd["ok"]')"
+assert_eq "test 2a: lock_present" "True" "$(jq_py "$c2" 'd["data"]["lock_present"]')"
+assert_eq "test 2a: stale пуст" "0" "$(jq_py "$c2" 'len(d["data"]["derived_stale"])')"
+
+# --- Test 2 (часть 2): правка _common.md поднимает ОБЕ роли ---------------
+
+printf 'COMMON v2\n' > "$p2/skills/bootstrap/templates/_common.md"
+c2b="$(run_check "$p2" "$j2")"
+assert_eq "test 2b: ok:false" "False" "$(jq_py "$c2b" 'd["ok"]')"
+assert_eq "test 2b: обе роли stale" "2" "$(jq_py "$c2b" 'len(d["data"]["derived_stale"])')"
+assert_eq "test 2b: changed_sources называет _common.md" "True" \
+  "$(jq_py "$c2b" 'all(x["changed_sources"] == ["skills/bootstrap/templates/_common.md"] for x in d["data"]["derived_stale"])')"
+assert_eq "test 2b: tampered пуст" "0" "$(jq_py "$c2b" 'len(d["data"]["derived_tampered"])')"
+
+# --- Test 3: правка одного шаблона роли поднимает ТОЛЬКО эту роль ---------
+
+read -r p3 j3 <<< "$(make_recorded_pair t3)"
+printf -- '---\nname: devops-engineer\ndescription: d\ntools: Read\n---\n\nBODY devops v2\n' \
+  > "$p3/skills/bootstrap/templates/devops-engineer.docker-compose.fastify.template.md"
+c3="$(run_check "$p3" "$j3")"
+assert_eq "test 3: ровно одна роль" "1" "$(jq_py "$c3" 'len(d["data"]["derived_stale"])')"
+assert_eq "test 3: это devops" "devops-engineer" \
+  "$(jq_py "$c3" 'd["data"]["derived_stale"][0]["role"]')"
+assert_eq "test 3: стек в находке" "docker-compose.fastify" \
+  "$(jq_py "$c3" 'd["data"]["derived_stale"][0]["stack"]')"
+
+# --- Test 4: правка собранного агента руками = tampered, не stale ---------
+
+read -r p4 j4 <<< "$(make_recorded_pair t4)"
+printf 'ASSEMBLED devops — HAND EDITED\n' > "$j4/.claude/agents/devops-engineer.md"
+c4="$(run_check "$p4" "$j4")"
+assert_eq "test 4: ok:false" "False" "$(jq_py "$c4" 'd["ok"]')"
+assert_eq "test 4: stale пуст" "0" "$(jq_py "$c4" 'len(d["data"]["derived_stale"])')"
+assert_eq "test 4: ровно один tampered" "1" "$(jq_py "$c4" 'len(d["data"]["derived_tampered"])')"
+assert_eq "test 4: это devops" "devops-engineer" \
+  "$(jq_py "$c4" 'd["data"]["derived_tampered"][0]["role"]')"
+
+# --- Test 9b: агент удалён из проекта = missing, не stale -----------------
+# (Test 9 в этом файле уже занят кейсом record'а — здесь речь о check.)
+
+read -r p9b j9b <<< "$(make_recorded_pair t9b)"
+rm "$j9b/.claude/agents/integration-specialist.md"
+c9b="$(run_check "$p9b" "$j9b")"
+assert_eq "test 9b: ровно один missing" "1" "$(jq_py "$c9b" 'len(d["data"]["derived_missing"])')"
+assert_eq "test 9b: это integ" "integration-specialist" \
+  "$(jq_py "$c9b" 'd["data"]["derived_missing"][0]["role"]')"
+assert_eq "test 9b: stale пуст" "0" "$(jq_py "$c9b" 'len(d["data"]["derived_stale"])')"
+assert_eq "test 9b: tampered пуст" "0" "$(jq_py "$c9b" 'len(d["data"]["derived_tampered"])')"
+
+# --- Test 6: lock-файла нет — отдельный reason, не дрейф ------------------
+
+p6="$tmpdir/t6-plugin"; j6="$tmpdir/t6-proj"
+make_fake_plugin "$p6"; make_fake_project "$j6"
+printf 'ASSEMBLED devops\n' > "$j6/.claude/agents/devops-engineer.md"
+c6="$(run_check "$p6" "$j6")"
+assert_eq "test 6: ok:false" "False" "$(jq_py "$c6" 'd["ok"]')"
+assert_eq "test 6: reason" "no plugin-lock.json" "$(jq_py "$c6" 'd["reason"]')"
+assert_eq "test 6: lock_present" "False" "$(jq_py "$c6" 'd["data"]["lock_present"]')"
+assert_eq "test 6: списки пусты" "True" \
+  "$(jq_py "$c6" 'all(len(d["data"][k]) == 0 for k in ("derived_stale","derived_tampered","derived_missing"))')"
+# Бриф проверяет только ok/reason/data — этого недостаточно: reason может
+# остаться "no plugin-lock.json", даже если ветка FileNotFoundError забыла
+# sys.exit(1) (см. негативный контроль №3 в task-2-brief.md). Код возврата —
+# отдельный контракт (emit ok:false ⇒ exit 1), и его надо снять отдельным
+# вызовом: run_check теряет $? внутри конвейера "| tail -n1".
+err6_file="$tmpdir/t6-stderr"
+(cd "$j6" && PLUGIN_ROOT="$p6" bash "$LOCK_SH" check >/dev/null 2>"$err6_file")
+rc6=$?
+assert_eq "test 6: exit code" "1" "$rc6"
+# Проверка exit code одна НЕ ловит пропажу sys.exit(1): без него выполнение
+# проваливается дальше в 'for ... in lock.get(...)', где lock не определена —
+# NameError оттуда сам даёт процессу exit 1, маскируя пропавший sys.exit(1)
+# (см. .superpowers/sdd/2026-09-21-plugin-lock-and-sync/task-2-report.md).
+# Ловим это по stderr: у корректной ветки FileNotFoundError он пуст — скрипт
+# печатает JSON и завершается сам, без незалогированного traceback'а.
+assert_eq "test 6: stderr пуст (без незамеченного traceback)" "" "$(cat "$err6_file")"
+
 exit $fail
