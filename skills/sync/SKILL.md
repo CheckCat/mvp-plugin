@@ -74,6 +74,8 @@ ${CLAUDE_PLUGIN_ROOT}/lib/plugin-lock.sh seal
 ${CLAUDE_PLUGIN_ROOT}/lib/finalize.sh sync <msg-file>
 ```
 
+Заводил задачу на Шаге 5 → `... --files .mvp/plan.json` (расширяет пресет, не заменяет).
+
 `<msg-file>` первой строкой: `chore: sync project artifacts with plugin`.
 
 Таблица рационализаций — [references/sync-handbook.md](references/sync-handbook.md) (**Load when:** тянет срезать угол).
