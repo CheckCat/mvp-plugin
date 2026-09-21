@@ -274,4 +274,53 @@ assert_eq "(trunc) long file is reported" "big.py" \
 assert_eq "(trunc) hidden line count" "70" \
   "$(json_field "$RP_OUT" '[t["hidden_lines"] for t in d["data"]["truncated"] if t["path"]=="big.py"][0]')"
 
+# --- (binary) a source file that went binary hides its whole change ---------
+# git calls a file binary once it finds a NUL byte in the first 8000, and then
+# prints "Binary files ... differ" instead of a diff. Measured: a NUL used as
+# a Map-key separator inside a template literal rode through three tasks and
+# two full pipeline runs — the ladder failed closed every time (reviewers said
+# they could not verify) but nothing named the cause.
+d_bin="$(new_git_repo)"
+printf 'seed\n' > "$d_bin/seed.txt"
+(cd "$d_bin" && git add seed.txt && git commit -q -m "chore: seed")
+BASE_BIN="$(cd "$d_bin" && git rev-parse HEAD)"
+
+# a TRACKED file that gains a NUL byte: the diff goes binary
+printf 'const sep = "a";\n' > "$d_bin/keys.ts"
+(cd "$d_bin" && git add keys.ts && git commit -q -m "feat: keys")
+BASE_BIN2="$(cd "$d_bin" && git rev-parse HEAD)"
+python3 -c "
+import sys
+open(sys.argv[1], 'wb').write(b'const sep = \"a\\x00b\";\n')
+" "$d_bin/keys.ts"
+run_rp "$d_bin" 910 --base "$BASE_BIN2"
+assert_eq "(binary) still exits 0 — the gate is the caller's, not this script's" "0" "$RP_EXIT"
+assert_eq "(binary) the file is reported" "keys.ts" \
+  "$(json_field "$RP_OUT" 'd["data"]["binary"][0]')"
+
+# a clean package reports an empty list, not a missing key
+d_ok="$(new_git_repo)"
+printf 'seed\n' > "$d_ok/seed.txt"
+(cd "$d_ok" && git add seed.txt && git commit -q -m "chore: seed")
+BASE_OK="$(cd "$d_ok" && git rev-parse HEAD)"
+printf 'print("hello")\n' > "$d_ok/app.py"
+run_rp "$d_ok" 911 --base "$BASE_OK"
+assert_eq "(binary) clean package reports an empty list" "0" \
+  "$(json_field "$RP_OUT" 'len(d["data"]["binary"])')"
+
+# SELF-TRIGGERING GUARD: an untracked file whose CONTENT quotes the marker ON
+# ITS OWN LINE must not be counted — that is exactly how a prior review report
+# quotes it, and a gate that fires on its own audit trail is the trap a NUL
+# scan already fell into once on this pipeline. The marker has to stand alone
+# for this test to test anything: re.fullmatch rejects it inside a sentence,
+# so an embedded quote would pass whatever the fence guard did.
+d_quote="$(new_git_repo)"
+printf 'seed\n' > "$d_quote/seed.txt"
+(cd "$d_quote" && git add seed.txt && git commit -q -m "chore: seed")
+BASE_Q="$(cd "$d_quote" && git rev-parse HEAD)"
+printf 'Ревьюер увидел вместо диффа:\n\nBinary files a/x.ts and b/x.ts differ\n\nи не смог ничего проверить.\n' > "$d_quote/report.md"
+run_rp "$d_quote" 912 --base "$BASE_Q"
+assert_eq "(binary) a quoted marker in file content is not a binary file" "0" \
+  "$(json_field "$RP_OUT" 'len(d["data"]["binary"])')"
+
 exit $fail

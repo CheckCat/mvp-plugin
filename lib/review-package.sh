@@ -8,7 +8,10 @@
 # the TARGET PROJECT root (not this plugin repo). Single-line JSON contract
 # on every exit path (same shape as lib/gate.sh's emit_result):
 #   {"ok":bool,"reason":str|null,"hint":str|null,"data":object|null}
-# ok:false always exits 1. Success: data = {"path": "<relative path>"}.
+# ok:false always exits 1. Success: data = {"path": "<relative path>",
+# "truncated": [...], "binary": [...]}. Both lists non-empty mean the
+# package is NOT a complete view of the change; workflow.mjs fails closed
+# on either.
 #
 # task-id is used verbatim in the output filename (bare ids, e.g. "001" —
 # controller ruling R11); no extra path-sanitization is applied since task
@@ -251,12 +254,44 @@ trap 'rm -f "$TRUNC_FILE"' EXIT
 # inliner (a missing import) silently reported a truncated package as
 # complete — exactly the failure this whole change exists to remove.
 if ! DATA="$(RP_OUT_PATH="$OUT_PATH" RP_TRUNC_FILE="$TRUNC_FILE" python3 -c '
-import json, os, sys
+import json, os, re, sys
 with open(os.environ["RP_TRUNC_FILE"], encoding="utf-8") as fh:
     truncated = json.load(fh)
 if not isinstance(truncated, list):
     sys.exit("truncation record is not a list")
-print(json.dumps({"path": os.environ["RP_OUT_PATH"], "truncated": truncated}))
+
+# data.binary: files git rendered as "Binary files ... differ" instead of a
+# diff. git calls a file binary when it finds a NUL byte in the first 8000,
+# so ONE stray zero byte inside a source file hides the entire change of that
+# file from the reviewer while every other gate stays green. Measured: a NUL
+# written as a Map-key separator inside a template literal rode through three
+# tasks and two full pipeline runs before anyone identified the cause. The
+# reviewers dutifully reported they could not verify; nothing said why.
+#
+# Scanned ONLY between the diff fence markers. The package inlines untracked
+# file CONTENT further down, and review reports legitimately quote the string
+# "Binary files ... differ" — counting those would make this gate
+# self-triggering, the same trap that turned a NUL scan red on its own audit
+# trail. Inside a diff every content line carries a +/-/space prefix, so a
+# bare fence line can only be ours.
+binary = []
+inside = False
+with open(os.environ["RP_OUT_PATH"], encoding="utf-8", errors="replace") as fh:
+    for raw in fh:
+        line = raw.rstrip("\n")
+        if not inside:
+            if line == "```diff":
+                inside = True
+            continue
+        if line == "```":
+            break
+        m = re.fullmatch(r"Binary files (.+) and (.+) differ", line)
+        if m:
+            path = m.group(1) if m.group(2) == "/dev/null" else m.group(2)
+            if path[:2] in ("a/", "b/"):
+                path = path[2:]
+            binary.append(path)
+print(json.dumps({"path": os.environ["RP_OUT_PATH"], "truncated": truncated, "binary": binary}))
 ' 2>&1)"; then
   fail "cannot read truncation record: $DATA" \
     "the untracked-file inliner did not complete; the package may be incomplete"

@@ -1183,11 +1183,42 @@ function truncatedPaths(rp) {
   return t.map((x) => (x && x.path ? `${x.path} (+${x.hidden_lines} lines hidden)` : String(x)));
 }
 
+// binaryPaths(rp) -> [] or the paths git rendered as "Binary files ... differ"
+// instead of a diff. A file goes binary the moment git finds a NUL byte in
+// its first 8000, so one stray zero byte inside a source file hides that
+// file's entire change from the reviewer while every other gate stays green.
+//
+// This is a SEPARATE gate from truncatedPaths, with its own message, because
+// the two incomplete-package causes have opposite fixes: truncation means
+// "too much to inline, split the task", a binary diff means "there is a byte
+// in this file that does not belong there". Measured: a NUL used as a Map-key
+// separator inside a template literal rode through three tasks and two full
+// pipeline runs. The ladder DID fail closed each time — the reviewers said
+// they could not verify — but nothing named the cause, so the diagnosis cost
+// two expensive runs instead of one halt message.
+function binaryPaths(rp) {
+  const b = rp && rp.data && rp.data.binary;
+  if (!Array.isArray(b)) return [];
+  return b.map((x) => String(x));
+}
+
+// binaryHalt(paths) -> the `why` for a package whose diff went binary.
+function binaryHalt(paths, stage) {
+  return `${stage}review package renders ${paths.length} file(s) as a binary diff, so the reviewer sees none of their content: `
+    + `${paths.join('; ')}. git calls a file binary when it finds a NUL byte in the first 8000 — in a source file that byte is `
+    + 'almost always an accident (a raw \\0 written as a separator inside a string literal is the measured case). '
+    + 'Remove the non-text byte, then re-run the task; no verdict issued on an invisible change is a gate.';
+}
+
 async function runReviewLadder(ctx) {
   const packageCmd = () => `bash "${lib}/review-package.sh" "${ctx.id}" --base "${ctx.baseSha}"`;
 
   let rp = await relay(packageCmd(), { phase: 'Review', label: `review-package-${ctx.id}-1` });
   if (!rp.ok) throw new Error(`review-package.sh failed for task ${ctx.id}: ${rp.reason || 'unknown'}`);
+  const bin = binaryPaths(rp);
+  if (bin.length) {
+    return { parked: true, why: binaryHalt(bin, '') };
+  }
   const cut = truncatedPaths(rp);
   if (cut.length) {
     return {
@@ -1353,6 +1384,10 @@ async function runReviewLadder(ctx) {
 
   rp = await relay(packageCmd(), { phase: 'Review', label: `review-package-${ctx.id}-2` });
   if (!rp.ok) throw new Error(`review-package.sh (post-fix) failed for task ${ctx.id}: ${rp.reason || 'unknown'}`);
+  const binAfterFix = binaryPaths(rp);
+  if (binAfterFix.length) {
+    return { parked: true, why: binaryHalt(binAfterFix, 'post-fix ') };
+  }
   const cutAfterFix = truncatedPaths(rp);
   if (cutAfterFix.length) {
     return {

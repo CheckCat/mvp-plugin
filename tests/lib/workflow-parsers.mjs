@@ -30,7 +30,7 @@ const WANTED = [
   'parseStatus', 'extractField', 'extractJsonField', 'extractConcernLines',
   'parseValidatorVerdict', 'parseReviewerVerdict', 'parseCannotVerify', 'parseReReview',
   'looksLikeEnvelope', 'coerceRelayFields',
-  'declaredOnly', 'truncatedPaths', 'shQuote', 'isRepoRootBoundary',
+  'declaredOnly', 'truncatedPaths', 'binaryPaths', 'shQuote', 'isRepoRootBoundary',
   'utf8Bytes', 'base64Encode', 'b64Payload',
   'severityRank', 'findingKey', 'unionFindings',
 ];
@@ -299,6 +299,21 @@ check('utf8Bytes: multi-byte lengths match Buffer', F.utf8Bytes('é€🚀').len
 check('base64Encode: padding for a 1-byte input', F.base64Encode([0x61]), Buffer.from([0x61]).toString('base64'));
 check('base64Encode: padding for a 2-byte input', F.base64Encode([0x61, 0x62]), Buffer.from([0x61, 0x62]).toString('base64'));
 check('base64Encode: no padding for a 3-byte input', F.base64Encode([0x61, 0x62, 0x63]), Buffer.from([0x61, 0x62, 0x63]).toString('base64'));
+
+// --- binaryPaths: an invisible change is not a reviewable one --------------
+// review-package.sh reports files git rendered as "Binary files ... differ".
+// Separate from truncatedPaths on purpose: truncation means "split the task",
+// a binary diff means "there is a byte in this file that does not belong".
+// Fail-closed shape matters — a missing or malformed key must read as "no
+// evidence of a problem", never crash the ladder that is the gate.
+check('binaryPaths: reports what review-package found',
+  F.binaryPaths({ data: { binary: ['src/keys.ts', 'src/other.ts'] } }), ['src/keys.ts', 'src/other.ts']);
+check('binaryPaths: clean package -> empty', F.binaryPaths({ data: { binary: [] } }), []);
+check('binaryPaths: key absent (older review-package) -> empty',
+  F.binaryPaths({ data: { truncated: [] } }), []);
+check('binaryPaths: no data at all -> empty', F.binaryPaths({}), []);
+check('binaryPaths: null envelope does not throw', F.binaryPaths(null), []);
+check('binaryPaths: a non-array value is not trusted', F.binaryPaths({ data: { binary: 'keys.ts' } }), []);
 
 if (failures) {
   console.error(`\n${failures} assertion(s) failed`);
