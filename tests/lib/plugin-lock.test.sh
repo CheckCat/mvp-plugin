@@ -224,8 +224,14 @@ assert_eq "test 6: exit code" "1" "$rc6"
 # проваливается дальше в 'for ... in lock.get(...)', где lock не определена —
 # NameError оттуда сам даёт процессу exit 1, маскируя пропавший sys.exit(1)
 # (см. .superpowers/sdd/2026-09-21-plugin-lock-and-sync/task-2-report.md).
-# Ловим это по stderr: у корректной ветки FileNotFoundError он пуст — скрипт
-# печатает JSON и завершается сам, без незалогированного traceback'а.
-assert_eq "test 6: stderr пуст (без незамеченного traceback)" "" "$(cat "$err6_file")"
+# Ловим это не по пустоте stderr (это покраснело бы от любого постороннего
+# шума — DeprecationWarning, будущая диагностика и т.п.), а по признаку
+# именно неотловленного исключения: подстроке "Traceback" в stderr. Она
+# появляется только когда python сам печатает traceback необработанного
+# исключения — то есть скрипт не завершился контролируемо через print+exit.
+if grep -q "Traceback" "$err6_file"; then
+  echo "FAIL: test 6: неотловленное исключение в stderr (нашли \"Traceback\"): $(cat "$err6_file")" >&2
+  fail=1
+fi
 
 exit $fail
