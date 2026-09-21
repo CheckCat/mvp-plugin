@@ -414,7 +414,14 @@ printf 'HAND-PLACED test-writer\n' > "$gl_unstamp_inplan/.claude/agents/test-wri
 (cd "$gl_unstamp_inplan" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/plugin-lock.sh" seal >/dev/null 2>&1)
 g_unstamp_inplan="$(cd "$gl_unstamp_inplan" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
 assert_eq "gate-lock: unstamped, роль в плане — валит" "False" "$(json_field "$g_unstamp_inplan" 'd["ok"]')"
-if ! echo "$g_unstamp_inplan" | grep -q "unstamped"; then
+# "unstamped)" (со скобкой, формат "<роль>(unstamped)" из reason) — не просто
+# "unstamped": та подстрока входит и в ключ data.derived_unstamped_foreign,
+# которым гейт на ПРОТИВОПОЛОЖНОМ (безобидном, ok:true) исходе докладывает
+# посторонний unstamped-файл. Без скобки страж декоративен: сломай gate.sh
+# так, чтобы он никогда не халтил на unstamped, — этот случай провалится в
+# warn-ветку, ok станет True, но "unstamped" всё равно останется в выводе
+# через тот самый ключ, и голый grep -q "unstamped" молча смолчит.
+if ! echo "$g_unstamp_inplan" | grep -q "unstamped)"; then
   echo "FAIL: gate-lock: unstamped(в плане) reason не про unstamped: $g_unstamp_inplan" >&2
   fail=1
 fi
