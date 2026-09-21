@@ -23,19 +23,21 @@ ${CLAUDE_PLUGIN_ROOT}/lib/plugin-lock.sh check
 
 Stop&Ask: роли `.claude/agents/*.md`, стек — `## Stack` (`docs/product/technical-solutions.md`); жди подтверждения.
 
-**Не угадывай.** Агент не помнит шаблона, фронтматтер не различает стек — неверный стек соберёт не того агента незаметно.
+**Не угадывай.** Стек не хранится машинно-читаемо; угадывание по описанию неточно — ошибка молча даёт не того агента.
 
 Нельзя печатать lock без пересборки — залочит расхождение как норму.
 
 ## Шаг 3 — пересборка
 
-На каждую роль из `data.derived_stale`, `derived_tampered`, `derived_missing`:
+Роли: нет lock → все с Шага 2 (`derived_*` пусты); иначе — `derived_stale`/`derived_tampered`/`derived_missing`.
+
+На каждую:
 
 ```
 ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/assemble-agent.sh <role> [stack]
 ```
 
-`stack` — из находки (`data.derived_*[].stack`); пустой не передавай, lock обновится сам.
+`stack` — из `data.derived_*[].stack` или Шага 2; пустой не передавай, lock обновится сам.
 
 `derived_missing` без `stack` (поля нет) — спроси оператора, как на Шаге 2.
 
@@ -49,17 +51,17 @@ ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/verify-agents-drift.sh
 
 ## Шаг 4 — нормативка
 
-Покажи `normative_changed`/`normative_added`/`normative_removed`. `plugin.git_sha` непуст и плагин — чекаут:
+Покажи `normative_changed`/`normative_added`/`normative_removed`. `plugin.git_sha` в `.mvp/plugin-lock.json` непуст, плагин — чекаут:
 
 ```
 git -C ${CLAUDE_PLUGIN_ROOT} diff <git_sha>..HEAD -- <пути>
 ```
 
-Нет коммита (переустановка, force-push) — только пути, не ошибка.
+Нет коммита (переустановка, force-push) — пути без ошибки.
 
 ## Шаг 5 — Stop&Ask по нормативке
 
-Правки проекту нужны? Спроси оператора; да — задача плана, не sync:
+Правки проекту нужны? Спроси; да — задача плана, не sync:
 
 ```
 ${CLAUDE_PLUGIN_ROOT}/lib/plan-io.mjs add-task --json '{...}'
@@ -80,12 +82,12 @@ ${CLAUDE_PLUGIN_ROOT}/lib/finalize.sh sync <msg-file>
 |---|---|
 | «Изменилось несильно, запечатаю без чтения» | `seal`=«принял»; слепая догонялка плагина |
 | «Подправлю `.claude/agents/*.md` руками» | `check`=`tampered`; правь шаблон, потом пересборка |
-| «Стек не записан, но я его помню» | Шаг 2 — Stop&Ask; неверный стек — не тот агент незаметно |
-| «Заодно перегенерирую `ci-mirror.sh`» | маппинг 5 строк от инцидентов, регенерация уничтожит |
+| «Стек не записан, но я его помню» | Шаг 2 — Stop&Ask; ошибка — не тот агент незаметно |
+| «Заодно перегенерирую `ci-mirror.sh`» | 5 строк маппинга от инцидентов; регенерация уничтожит |
 
 ## HARD-GATE
 
-Покажи: что пересобрано, `verify-agents-drift.sh`, нормативные изменения, sha коммита.
+Покажи: пересобрано, `verify-agents-drift.sh`, нормативные изменения, sha коммита.
 
 Пересобран хоть один агент — скажи оператору **дословно**:
 

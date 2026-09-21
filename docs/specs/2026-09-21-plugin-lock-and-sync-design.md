@@ -128,11 +128,14 @@ Semver требует дисциплины бумпа, а дисциплина �
 байт-в-байт.
 
 Это необходимо: собранный `.claude/agents/<role>.md` **не помнит, из какого
-шаблона собран**. `name` и `description` копируются из шаблона, но стек в
-них машинно-читаемо не закодирован — по фронтматтеру нельзя отличить
-`devops-engineer.docker-compose.fastify` от
-`devops-engineer.docker-dokploy.nestjs`. Плюс
-`devops-engineer.docker-dokploy.fastapi.template.md` использует
+шаблона собран**. `name` и `description` копируются из шаблона, но нет поля,
+контрактно несущего `<role>.<stack>` — только свободный текст `description`.
+Для части ролей он называет фреймворк прямо (`devops-engineer.docker-compose.fastify`
+и `devops-engineer.docker-dokploy.nestjs`, например, различимы текстуально —
+«docker-compose» против «Dokploy deploy config»), но это не контракт:
+разбор прозы обратно в точный `<role>.<stack>` — эвристика человека, а не
+парсинг схемы, и на новом или отредактированном шаблоне она молча ошибается.
+Плюс `devops-engineer.docker-dokploy.fastapi.template.md` использует
 плейсхолдеры, а `assemble-agent.sh` берёт `PROJECT` по умолчанию из имени
 директории проекта — значение, которое вызывающий мог переопределить через
 env и которое нигде не сохраняется.
@@ -270,11 +273,17 @@ Iron Law: **чинится только производное; норматив
 ```
 Шаг 1. plugin-lock.sh check
 Шаг 2. ok:true → «всё актуально», стоп.
-Шаг 3. lock отсутствует → Stop&Ask: перечислить роли из .claude/agents/,
-       предложить стеки из `## Stack` брифа, дождаться подтверждения.
-       Не угадывать: неверный стек соберёт не того агента молча.
-Шаг 4. для каждой роли из derived_stale / derived_tampered / derived_missing
-       → assemble-agent.sh <role> <stack>  (он же обновит запись в lock)
+Шаг 3. lock отсутствует (lock_present:false) → Stop&Ask: перечислить роли
+       из .claude/agents/, предложить стеки из `## Stack` брифа, дождаться
+       подтверждения. Не угадывать: стек не хранится машинно-читаемо,
+       угадывание по description — эвристика, её ошибка молча даёт не
+       того агента.
+Шаг 4. роли для пересборки: lock отсутствовал на Шаге 3 → derived_stale/
+       derived_tampered/derived_missing пусты по построению, берётся весь
+       список, подтверждённый на Шаге 3; иначе — сами эти три массива
+       (для derived_missing стек не известен — спросить как на Шаге 3).
+       На каждую → assemble-agent.sh <role> <stack>  (он же обновит запись
+       в lock)
 Шаг 5. verify-agents-drift.sh — подтверждение
 Шаг 6. показать normative_changed / added / removed; если git_sha в lock
        есть и плагин — git-чекаут, показать `git diff <sha>..HEAD -- <пути>`
