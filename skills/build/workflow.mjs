@@ -487,13 +487,17 @@ const REVIEW_SAMPLES = 3;
 // each of the four call sites that actually invoke agent() (relayLine, relay,
 // agentText, the patch-writer). Telemetry records the per-task delta.
 //
-// Why it exists: `budget.spent()` — the number stored as delta_tokens — only
-// sees the CONTROLLER's usage, and measured against the workflow runtime's own
-// per-agent records it understates the true cost by ~8.4x. Dispatch count is
-// not a token figure, but unlike delta_tokens it scales with the real spend
-// (each dispatch carries a ~30 200-token boot floor), so it is an honest
-// proxy. It is added ALONGSIDE delta_tokens, never replacing it: events.jsonl
-// is append-only and a project's history may span plugin versions.
+// Why it exists: `budget.spent()` — the number stored as delta_tokens —
+// counts OUTPUT tokens only (of the whole run, subagents included; measured
+// 2026-09-21, see docs/observations/2026-09-21-delta-tokens-measures-output.md
+// — this corrects an earlier note here claiming it saw the controller alone
+// and understated cost by ~8.4x, which compared output-only against full
+// spend). Output is ~14% of the real spend; the mass is cache creation, and
+// each dispatch carries a ~30 200-token boot floor that lands there. Dispatch
+// count is not a token figure, but it tracks the part that actually costs, so
+// it is the honest proxy. It is added ALONGSIDE delta_tokens, never replacing
+// it: events.jsonl is append-only and a project's history may span plugin
+// versions.
 let dispatchCount = 0;
 
 let lib = ''; // argv.plugin_root + '/lib', set once argv is known-valid

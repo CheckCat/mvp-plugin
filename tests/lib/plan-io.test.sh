@@ -441,7 +441,11 @@ fi
 ev="$(tail -n1 "$dir/.mvp/telemetry/events.jsonl")"
 assert_eq "N-6 telemetry keeps delta_tokens" "5" "$(json_field "$ev" 'd["delta_tokens"]')"
 assert_eq "N-7 telemetry records dispatches" "9" "$(json_field "$ev" 'd["dispatches"]')"
-assert_eq "N-8 telemetry marks the figure controller-only" "True" "$(json_field "$ev" 'd["controller_only"]')"
+# delta_tokens counts OUTPUT tokens of the whole run, subagents included —
+# measured 2026-09-21, see docs/observations/. The field used to be stamped
+# controller_only:true, which was a false claim about our own data.
+assert_eq "N-8 telemetry says what the figure counts" "output" "$(json_field "$ev" 'd["tokens_scope"]')"
+assert_eq "N-8b the false controller_only stamp is gone" "None" "$(json_field "$ev" 'd.get("controller_only")')"
 
 # a newline in the title must not push the real subject into the commit body
 dir="$(new_repo)"
