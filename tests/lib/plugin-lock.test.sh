@@ -347,4 +347,36 @@ else
   fail=1
 fi
 
+# --- Test 12: derived_unstamped — файл лежит в OUT_DIR, но не в lock -------
+# Обратное отношение к derived_missing: check раньше обходил только
+# lock["derived"] (файл-без-записи был невидим механизму целиком — ровно тот
+# отказ, ради которого весь lock и построен). Два собранных агента, записан
+# только один.
+
+read -r p12 j12 <<< "$(make_recorded_pair t12-stamped)"
+# make_recorded_pair уже записал ОБЕ роли — сперва проверяем обратный
+# контроль (записаны обе → unstamped пуст), потом стираем запись одной из
+# них из lock, оставляя сам файл на месте, и проверяем прямой случай.
+c12_both="$(run_check "$p12" "$j12")"
+assert_eq "test 12: обе роли записаны -> unstamped пуст" "0" \
+  "$(jq_py "$c12_both" 'len(d["data"]["derived_unstamped"])')"
+
+PL_LOCK_PATH="$j12/.mvp/plugin-lock.json" python3 -c '
+import json, os
+p = os.environ["PL_LOCK_PATH"]
+lock = json.loads(open(p, encoding="utf-8").read())
+del lock["derived"][".claude/agents/integration-specialist.md"]
+open(p, "w", encoding="utf-8").write(json.dumps(lock, indent=1, sort_keys=True))
+'
+c12="$(run_check "$p12" "$j12")"
+assert_eq "test 12: ok:false" "False" "$(jq_py "$c12" 'd["ok"]')"
+assert_eq "test 12: ровно один unstamped" "1" "$(jq_py "$c12" 'len(d["data"]["derived_unstamped"])')"
+assert_eq "test 12: это integration-specialist.md" ".claude/agents/integration-specialist.md" \
+  "$(jq_py "$c12" 'd["data"]["derived_unstamped"][0]["path"]')"
+assert_eq "test 12: находка несёт только path" '["path"]' \
+  "$(jq_py "$c12" 'json.dumps(sorted(d["data"]["derived_unstamped"][0].keys()))')"
+assert_eq "test 12: reason называет unstamped" "True" \
+  "$(jq_py "$c12" '"unstamped" in d["reason"]')"
+
+
 exit $fail

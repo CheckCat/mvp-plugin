@@ -29,7 +29,7 @@ Stop&Ask: роли `.claude/agents/*.md`, стек — `## Stack` (`docs/product
 
 ## Шаг 3 — пересборка
 
-Роли: нет lock → все с Шага 2 (`derived_*` пусты); иначе — `derived_stale`/`derived_tampered`/`derived_missing`.
+Роли: нет lock → все с Шага 2 (`derived_*` пусты); иначе — `derived_stale`/`derived_tampered`/`derived_missing`/`derived_unstamped`.
 
 На каждую:
 
@@ -39,7 +39,7 @@ ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/assemble-agent.sh <role> [stack]
 
 `stack` — из `data.derived_*[].stack` или Шага 2; пустой не передавай, lock обновится сам.
 
-`derived_missing` без `stack` (поля нет) — спроси оператора, как на Шаге 2.
+`derived_missing`/`derived_unstamped` без `stack` (поля нет) — спроси оператора, как на Шаге 2.
 
 Затем:
 
@@ -76,14 +76,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/finalize.sh sync <msg-file>
 
 `<msg-file>` первой строкой: `chore: sync project artifacts with plugin`.
 
-## Rationalization table
-
-| Соблазн | Почему нет |
-|---|---|
-| «Изменилось несильно, запечатаю без чтения» | `seal`=«принял»; слепая догонялка плагина |
-| «Подправлю `.claude/agents/*.md` руками» | `check`=`tampered`; правь шаблон, потом пересборка |
-| «Стек не записан, но я его помню» | Шаг 2 — Stop&Ask; ошибка — не тот агент незаметно |
-| «Заодно перегенерирую `ci-mirror.sh`» | 5 строк маппинга от инцидентов; регенерация уничтожит |
+Таблица рационализаций — [references/sync-handbook.md](references/sync-handbook.md) (**Load when:** тянет срезать угол).
 
 ## HARD-GATE
 

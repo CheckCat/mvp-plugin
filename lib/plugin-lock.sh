@@ -154,11 +154,12 @@ print(json.dumps({"ok": True, "reason": None, "hint": None,
     exit $?
     ;;
   check)
-    PL_PLUGIN_ROOT="$PLUGIN_ROOT" PL_LOCK="$LOCK" PL_GLOBS="$NORMATIVE_GLOBS" python3 -c '
+    PL_PLUGIN_ROOT="$PLUGIN_ROOT" PL_LOCK="$LOCK" PL_GLOBS="$NORMATIVE_GLOBS" PL_OUT_DIR="$OUT_DIR" python3 -c '
 import hashlib, json, os, pathlib, sys
 
 plugin_root = pathlib.Path(os.environ["PL_PLUGIN_ROOT"])
 lock_path   = pathlib.Path(os.environ["PL_LOCK"])
+out_dir     = pathlib.Path(os.environ["PL_OUT_DIR"])
 
 def sha(path):
     return "sha256:" + hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
@@ -166,6 +167,7 @@ def sha(path):
 empty = {
     "lock_present": False,
     "derived_stale": [], "derived_tampered": [], "derived_missing": [],
+    "derived_unstamped": [],
     "normative_changed": [], "normative_added": [], "normative_removed": [],
 }
 
@@ -222,6 +224,17 @@ for out_path, entry in sorted(lock.get("derived", {}).items()):
     elif sha(out_path) != entry.get("output_sha256"):
         data["derived_tampered"].append({"path": out_path, "role": role, "stack": stack})
 
+# Обратное отношение: файл лежит в OUT_DIR, но ключа для него в derived нет.
+# Ни одна из проверок выше его не видит — цикл выше идёт по lock["derived"],
+# а не по файловой системе. Без этого агент без записи в lock невидим всему
+# механизму (спека §5.2).
+derived_keys = set(lock.get("derived", {}).keys())
+if out_dir.is_dir():
+    for f in sorted(out_dir.glob("*.md")):
+        p = str(out_dir / f.name)
+        if p not in derived_keys:
+            data["derived_unstamped"].append({"path": p})
+
 problems = []
 if data["derived_stale"]:
     problems.append("%d agent(s) stale vs plugin" % len(data["derived_stale"]))
@@ -229,6 +242,8 @@ if data["derived_tampered"]:
     problems.append("%d agent(s) hand-edited" % len(data["derived_tampered"]))
 if data["derived_missing"]:
     problems.append("%d agent file(s) missing" % len(data["derived_missing"]))
+if data["derived_unstamped"]:
+    problems.append("%d agent file(s) unstamped" % len(data["derived_unstamped"]))
 
 n_drift = len(data["normative_changed"]) + len(data["normative_added"]) + len(data["normative_removed"])
 if n_drift:

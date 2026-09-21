@@ -338,6 +338,8 @@ for key, label in (("derived_stale", "stale"), ("derived_tampered", "hand-edited
                    ("derived_missing", "missing")):
     for item in d.get(key) or []:
         hard.append("%s(%s)" % (item.get("role"), label))
+for item in d.get("derived_unstamped") or []:
+    hard.append("%s(unstamped)" % item.get("path"))
 if hard:
     print(json.dumps({"verdict": "halt",
                       "reason": "agent file(s) out of sync with plugin: " + ", ".join(sorted(hard))}))

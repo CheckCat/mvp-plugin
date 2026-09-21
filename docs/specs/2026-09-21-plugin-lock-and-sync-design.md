@@ -198,6 +198,7 @@ Upsert одной записи в `derived`. Вычисляет `sources`, `outp
                          "changed_sources": ["…"]}],
   "derived_tampered":  [{"path": "…", "role": "…", "stack": "…"}],
   "derived_missing":   [{"path": "…", "role": "…"}],
+  "derived_unstamped": [{"path": "…"}],
   "normative_changed": ["…"],
   "normative_added":   ["…"],
   "normative_removed": ["…"]
@@ -206,7 +207,14 @@ Upsert одной записи в `derived`. Вычисляет `sources`, `outp
 
 - `derived_stale` — расходятся `sources`;
 - `derived_tampered` — расходится `output_sha256` при чистых `sources`;
-- `derived_missing` — запись в lock есть, файла в проекте нет.
+- `derived_missing` — запись в lock есть, файла в проекте нет;
+- `derived_unstamped` — обратный случай: файл лежит в `OUT_DIR/*.md`, но его
+  путь не встречается ни в одном ключе `derived`. Без этой проверки такой
+  файл не видит ни одна из веток выше — они все обходят `lock["derived"]`,
+  а не файловую систему — и агент без контракта остаётся невидим всему
+  механизму (см. §1: это ровно тот отказ, ради предотвращения которого lock
+  и построен). Находка несёт только `path` — роли для неё нет ни в каком
+  источнике.
 
 `check` возвращает `ok:false` на **любое** расхождение, включая расхождение
 только в нормативке. Он диагност, а не политика: что с находкой делать,
@@ -246,9 +254,10 @@ Upsert одной записи в `derived`. Вычисляет `sources`, `outp
 `check` возвращает `ok:false` на любое расхождение (§5.2), и гейт его
 переинтерпретирует.
 
-**Расхождение в `derived` (`stale`/`tampered`/`missing`) → гейт даёт
-`ok:false`, halt.** `reason` называет роли, `hint` — `run mvp:sync`. Сюда
-же попадает `lock_present: false` при наличии `.claude/agents/*.md`.
+**Расхождение в `derived` (`stale`/`tampered`/`missing`/`unstamped`) → гейт
+даёт `ok:false`, halt.** `reason` называет роли (`unstamped` — путь, роли у
+него нет), `hint` — `run mvp:sync`. Сюда же попадает `lock_present: false`
+при наличии `.claude/agents/*.md`.
 
 **Расхождение только в `normative` → гейт даёт `ok:true`**, плюс
 `normative_changed` в `data`. `skills/build/SKILL.md` обязан показать
@@ -278,12 +287,12 @@ Iron Law: **чинится только производное; норматив
        подтверждения. Не угадывать: стек не хранится машинно-читаемо,
        угадывание по description — эвристика, её ошибка молча даёт не
        того агента.
-Шаг 4. роли для пересборки: lock отсутствовал на Шаге 3 → derived_stale/
-       derived_tampered/derived_missing пусты по построению, берётся весь
-       список, подтверждённый на Шаге 3; иначе — сами эти три массива
-       (для derived_missing стек не известен — спросить как на Шаге 3).
-       На каждую → assemble-agent.sh <role> <stack>  (он же обновит запись
-       в lock)
+Шаг 4. роли для пересборки: lock отсутствовал на Шаге 3 → derived_*
+       пусты по построению, берётся весь список, подтверждённый на Шаге 3;
+       иначе — derived_stale/derived_tampered/derived_missing/
+       derived_unstamped (для derived_missing и derived_unstamped стек не
+       известен — спросить как на Шаге 3). На каждую → assemble-agent.sh
+       <role> <stack>  (он же обновит запись в lock)
 Шаг 5. verify-agents-drift.sh — подтверждение
 Шаг 6. показать normative_changed / added / removed; если git_sha в lock
        есть и плагин — git-чекаут, показать `git diff <sha>..HEAD -- <пути>`
