@@ -31,7 +31,7 @@ Stop&Ask: роли `.claude/agents/*.md`, стек — `## Stack` (`docs/product
 
 ## Шаг 3 — пересборка
 
-Роли: нет lock → все с Шага 2 (`derived_*` пусты); иначе — `derived_stale`/`derived_tampered`/`derived_missing`/`derived_unstamped`.
+Роли: нет lock → все с Шага 2 (`derived_*` пусты); иначе — `derived_stale`/`derived_tampered`/`derived_missing`/`derived_unstamped`, но из `derived_unstamped` — только роли с шаблоном в плагине (справочник: посторонний агент).
 
 На каждую:
 

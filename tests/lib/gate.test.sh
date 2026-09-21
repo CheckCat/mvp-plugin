@@ -377,17 +377,69 @@ if ! echo "$g_missing" | grep -q "missing"; then
   echo "FAIL: gate-lock: missing reason не про missing: $g_missing" >&2
   fail=1
 fi
+# Закрыть missing ДО следующего случая: байты совпадают с тем, что было в
+# момент record строкой выше, новый output_sha256 не нужен. Остаток 3а:
+# предыдущая версия этого файла не восстанавливала файл здесь, и следующий
+# ("unstamped") ассерт ok:false проходил по чужой причине — missing,
+# оставшийся открытым от этого случая, а не по своей.
+printf 'ASSEMBLED integ\n' > "$gl_proj/.claude/agents/integration-specialist.md"
 
-# unstamped: файл лежит в OUT_DIR, роль вне plan.json, записи в lock нет
-# вовсе (не record — просто файл).
-printf 'ORPHAN\n' > "$gl_proj/.claude/agents/orphan-role.md"
-g_unstamped="$(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
-assert_eq "gate-lock: unstamped валит" "False" "$(json_field "$g_unstamped" 'd["ok"]')"
-if ! echo "$g_unstamped" | grep -q "unstamped"; then
-  echo "FAIL: gate-lock: unstamped reason не про unstamped: $g_unstamped" >&2
+# --- plugin-lock: derived_unstamped халтит ТОЛЬКО если роль реально
+# диспатчится планом (Остаток 1, спека §7/§5.2) -------------------------
+# check не умеет отличить подменённого плагинного агента от рукописного
+# файла оператора — у unstamped-находки нет поля role. Различает гейт, по
+# planned_roles (то же извлечение ролей из plan.json, что и у missing_roles
+# чуть выше в lib/gate.sh). Опасен только тот случай, когда план вот-вот
+# выдаст задачу под эту роль; посторонний файл — не наша забота, но и не
+# тишина: путь обязан быть виден оператору в data (симметрично normative).
+#
+# Две ИЗОЛИРОВАННЫЕ фикстуры, не мутации gl_proj: сценарии взаимоисключающие
+# (один обязан валить, другой обязан проходить), и после известной находки
+# в Остатке 3а история мутаций gl_proj и так длинная — плодить в ней ещё
+# одну пару "добавили/убрали" означало бы новый шанс на тот же дефект.
+
+# (a) роль unstamped-файла ЕСТЬ в plan.json -> halt.
+gl_unstamp_inplan="$tmproot/gate-unstamped-inplan"
+mkdir -p "$gl_unstamp_inplan/.claude/agents" "$gl_unstamp_inplan/.mvp"
+(cd "$gl_unstamp_inplan" && git init -q . && git config user.email t@t && git config user.name t)
+printf '%s\n' '{"tasks":[{"id":"001","role":"test-writer"}]}' > "$gl_unstamp_inplan/.mvp/plan.json"
+printf '%s\n' '{"phase":"plan-done"}' > "$gl_unstamp_inplan/.mvp/state.json"
+# Файл существует (не запись через record) — ровно то, что делает находку
+# unstamped, а не missing/stale/tampered.
+printf 'HAND-PLACED test-writer\n' > "$gl_unstamp_inplan/.claude/agents/test-writer.md"
+(cd "$gl_unstamp_inplan" && git add .mvp .claude && git commit -qm init)
+# lock должен существовать (иначе halt приходит по "no .mvp/plugin-lock.json",
+# а не по unstamped) — seal его создаёт с derived:{} и нормативкой текущего
+# плагина; derived-запись для test-writer в нём нет ни одной.
+(cd "$gl_unstamp_inplan" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/plugin-lock.sh" seal >/dev/null 2>&1)
+g_unstamp_inplan="$(cd "$gl_unstamp_inplan" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: unstamped, роль в плане — валит" "False" "$(json_field "$g_unstamp_inplan" 'd["ok"]')"
+if ! echo "$g_unstamp_inplan" | grep -q "unstamped"; then
+  echo "FAIL: gate-lock: unstamped(в плане) reason не про unstamped: $g_unstamp_inplan" >&2
   fail=1
 fi
-rm "$gl_proj/.claude/agents/orphan-role.md"
+
+# (b) роль unstamped-файла НЕ входит в plan.json -> проходит, путь виден в data.
+# ("my-custom-helper" — тот самый рукописный агент оператора из Остатка 1:
+# ни одна роль плана не называется так же.)
+gl_unstamp_foreign="$tmproot/gate-unstamped-foreign"
+mkdir -p "$gl_unstamp_foreign/.claude/agents" "$gl_unstamp_foreign/.mvp"
+(cd "$gl_unstamp_foreign" && git init -q . && git config user.email t@t && git config user.name t)
+printf '%s\n' '{"tasks":[{"id":"001","role":"devops-engineer"}]}' > "$gl_unstamp_foreign/.mvp/plan.json"
+printf '%s\n' '{"phase":"plan-done"}' > "$gl_unstamp_foreign/.mvp/state.json"
+printf 'ASSEMBLED devops\n' > "$gl_unstamp_foreign/.claude/agents/devops-engineer.md"
+(cd "$gl_unstamp_foreign" && git add .mvp .claude && git commit -qm init)
+# devops-engineer — единственная роль плана — ЗАПИСАНА и запечатана, иначе
+# она сама оказалась бы unstamped(в плане) и замаскировала бы то, что
+# проверяет этот случай.
+(cd "$gl_unstamp_foreign" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/plugin-lock.sh" \
+   record devops-engineer docker-compose.fastify >/dev/null 2>&1)
+(cd "$gl_unstamp_foreign" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/plugin-lock.sh" seal >/dev/null 2>&1)
+printf 'MY CUSTOM HELPER\n' > "$gl_unstamp_foreign/.claude/agents/my-custom-helper.md"
+g_unstamp_foreign="$(cd "$gl_unstamp_foreign" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: unstamped, роли нет в плане — не валит" "True" "$(json_field "$g_unstamp_foreign" 'd["ok"]')"
+assert_eq "gate-lock: посторонний путь виден в data" ".claude/agents/my-custom-helper.md" \
+  "$(json_field "$g_unstamp_foreign" 'd["data"]["derived_unstamped_foreign"][0]')"
 
 # Отсутствие lock при наличии агентов — валит
 rm "$gl_proj/.mvp/plugin-lock.json"

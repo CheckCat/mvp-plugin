@@ -1,5 +1,25 @@
 # mvp:sync — справочник
 
+## `derived_unstamped` без шаблона — посторонний агент, не наша забота
+
+`derived_unstamped` в `check` — файл в `.claude/agents/*.md`, на который нет
+записи в lock. Причин ровно две, и они требуют разного лечения:
+
+1. Подменённый/потерявший отметку плагинный агент — под него в
+   `skills/bootstrap/templates/` ЕСТЬ шаблон (`<role>.template.md` или
+   `<role>.<stack>.template.md`). Пересобери его как обычно (Шаг 3).
+2. Рукописный агент, который оператор положил в `.claude/agents/` сам, к
+   плагину отношения не имеющий — шаблона под его имя нет вовсе.
+
+Перед пересборкой находки из `derived_unstamped` проверь, есть ли под её имя
+шаблон: `ls ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/templates/<роль>*.template.md`.
+Нет ни одного — не зови `assemble-agent.sh`: он ответит `ok:false, "no
+template for role=..."`, а чинить тут нечего, файл не наш. `gate.sh build` эту
+находку уже не блокирует, если её роль не входит в задачи `.mvp/plan.json`
+(design doc §7) — но `check` этого различия не знает и репортит все
+`derived_unstamped` одним списком, поэтому фильтр «есть шаблон?» — на
+стороне `mvp:sync`, не на стороне механизма.
+
 ## Битый `.mvp/plugin-lock.json`
 
 `check` кладёт в `data` булево поле `lock_broken`. `true` — файл существует, но не
