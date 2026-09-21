@@ -196,6 +196,47 @@ assert_eq "next dirty-tree: halt" "dirty-tree" "$(json_field "$out" 'd["data"]["
 files_str="$(json_field "$out" '" ".join(d["data"]["files"])')"
 assert_contains "next dirty-tree: lists README.md" "$files_str" "README.md"
 
+# --accept-dirty: the operator escape from a dead end made of two correct rules.
+# park() leaves the tree alone when the task boundary is the repo root (no safe
+# partial reset there), so the task is `failed` with its own work still in the
+# tree — and this check runs BEFORE the --task branch, so re-dispatching that
+# task halts on its own output. Measured on trellis task 019; the operator had
+# to choose between destroying finished work and finalizing outside the
+# pipeline.
+dir="$(new_repo)"
+echo "stray edit" > "$dir/README.md"
+out="$(run_plan_io "$dir" next --accept-dirty)"
+assert_eq "accept-dirty: no dirty halt" "None" "$(json_field "$out" 'd["data"].get("halt")')"
+assert_eq "accept-dirty: a task is actually handed back" "001" "$(json_field "$out" 'd["data"]["task_id"]')"
+
+# A valueless flag must not swallow the argument after it: without boolean
+# support --accept-dirty would consume "--task" as its value and fail.
+out="$(run_plan_io "$dir" next --accept-dirty --task 001)"
+assert_eq "accept-dirty: boolean flag does not eat the flag after it" "001" "$(json_field "$out" 'd["data"]["task_id"]')"
+
+# the flag is per-invocation, never sticky
+out="$(run_plan_io "$dir" next)"
+assert_eq "accept-dirty: without the flag the gate is back" "dirty-tree" "$(json_field "$out" 'd["data"]["halt"]')"
+
+# the halt names the dead end when the named task is the parked one
+dir="$(new_repo)"
+mutate_plan "$dir" 'plan["tasks"][0]["status"] = "failed"'
+echo "task 001 work" > "$dir/README.md"
+out="$(run_plan_io "$dir" next --task 001)"
+assert_eq "accept-dirty: still halts without the flag" "dirty-tree" "$(json_field "$out" 'd["data"]["halt"]')"
+assert_contains "accept-dirty: halt explains the dead end" \
+  "$(json_field "$out" 'd["data"]["hint"] or ""')" "park() does not reset a repo-root boundary"
+assert_contains "accept-dirty: halt names the way out" \
+  "$(json_field "$out" 'd["data"]["hint"] or ""')" "--accept-dirty"
+
+# a dirty tree that has nothing to do with a parked task gets no such hint:
+# the operator must not be nudged toward accepting someone else's edits
+dir="$(new_repo)"
+echo "stray edit" > "$dir/README.md"
+out="$(run_plan_io "$dir" next --task 001)"
+assert_eq "accept-dirty: no hint when the task is not parked" "None" \
+  "$(json_field "$out" 'd["data"]["hint"]')"
+
 # bonus: explicit --task with unmet deps -> halt dag-stuck with detail
 dir="$(new_repo)"
 out="$(run_plan_io "$dir" next --task 002)"; rc=$?

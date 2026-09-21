@@ -1778,6 +1778,15 @@ function validateArgs(a) {
   if (a.project_root !== undefined && (typeof a.project_root !== 'string' || a.project_root === '')) {
     return { halt: 'bad-args', detail: `project_root, if given, must be a non-empty string, got: ${JSON.stringify(a.project_root)}` };
   }
+  // accept_dirty is OPTIONAL and, unlike every other arg, is a judgement the
+  // OPERATOR makes about a tree they looked at — the workflow never infers it.
+  // It only reaches `plan-io.mjs next`, which documents the dead end it opens:
+  // a task parked with a repo-root boundary keeps its own work in the tree and
+  // cannot otherwise be re-dispatched. Strict boolean: a truthy string would
+  // let a stray "false" disable the gate.
+  if (a.accept_dirty !== undefined && typeof a.accept_dirty !== 'boolean') {
+    return { halt: 'bad-args', detail: `accept_dirty, if given, must be a boolean, got: ${JSON.stringify(a.accept_dirty)}` };
+  }
   return null;
 }
 
@@ -1851,7 +1860,8 @@ try {
   let tasksDone = 0;
 
   while (tasksDone < argv.max_tasks) {
-    const nextCmd = `node "${lib}/plan-io.mjs" next${argv.task_id ? ` --task "${argv.task_id}"` : ''}`;
+    const nextCmd = `node "${lib}/plan-io.mjs" next${argv.task_id ? ` --task "${argv.task_id}"` : ''}`
+      + (argv.accept_dirty === true ? ' --accept-dirty' : '');
     const adv = await relay(nextCmd, { phase: 'Advance', label: `advance-${tasksDone}` });
     if (!adv.ok) {
       throw new Error(`plan-io.mjs next failed: ${adv.reason || 'unknown'}`);
