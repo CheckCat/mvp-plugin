@@ -40,6 +40,14 @@ make_fake_plugin() { # <dir>
   printf 'COMMON v1\n' > "$p/skills/bootstrap/templates/_common.md"
   printf -- '---\nname: devops-engineer\ndescription: d\ntools: Read\n---\n\nBODY devops v1\n' \
     > "$p/skills/bootstrap/templates/devops-engineer.docker-compose.fastify.template.md"
+  # Второй валидный стековый шаблон той же роли — нужен, чтобы негативный
+  # контроль "record получил НЕВЕРНЫЙ, но всё же существующий стек" мог
+  # покраснеть именно на значении stack, а не на "assemble ok" (см. round 1
+  # review finding в task-4-report.md): без него у роли devops-engineer
+  # была ровно одна легальная пара (роль, стек), и "assemble ok:true" было
+  # логически неотличимо от "stack передан верно".
+  printf -- '---\nname: devops-engineer\ndescription: d\ntools: Read\n---\n\nBODY devops swarm v1\n' \
+    > "$p/skills/bootstrap/templates/devops-engineer.docker-swarm.template.md"
   printf -- '---\nname: integration-specialist\ndescription: d\ntools: Read\n---\n\nBODY integ v1\n' \
     > "$p/skills/bootstrap/templates/integration-specialist.template.md"
   printf -- '---\nname: test-writer\ndescription: d\ntools: Read\n---\n\nBODY test-writer v1\n' \
