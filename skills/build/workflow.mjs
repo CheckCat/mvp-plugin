@@ -1717,6 +1717,29 @@ async function runOneTask(adv) {
     return park(id, boundary, 'implementer dispatch failed: both agentType and general-purpose fallback returned no result');
   }
 
+  // Halt on the FIRST fallback, before the ladders spend anything on work that
+  // was produced without the role's contract.
+  //
+  // This used to ship as a per-task concern and let the run continue. Measured
+  // (trellis, 2026-09): three tasks ran on general-purpose that way — no
+  // _common.md contract, so no boundary rules, no report format, no blocker
+  // protocol — and review approved all three, because review judges the diff,
+  // not which agent produced it. The concern was written faithfully each time
+  // and read by nobody until the retro. A degradation that repeats silently
+  // per task is not a concern, it is a broken run.
+  //
+  // The cost of halting is one session restart. The cost of continuing is
+  // every remaining task of the plan built without its role contract, which
+  // is why this is a halt and not a louder concern.
+  if (agentTypeFallbacks.has(role)) {
+    return park(id, boundary,
+      `agentType "${role}" did not dispatch — this task ran on general-purpose, WITHOUT the `
+      + '_common.md contract (boundary rules, report format, blocker protocol) that mvp:bootstrap assembled for it. '
+      + `Check whether .claude/agents/${role}.md exists. If it DOES: agents register at session start, so a bootstrap `
+      + 'run in this same session yields files that are not dispatchable until the next one — restart the session and '
+      + 're-run this task. If it does NOT: mvp:bootstrap never assembled that role, and no restart will help — fix that first.');
+  }
+
   const concerns = [];
   const status = parseStatus(implText);
   if (status === 'BLOCKED' || status === 'NEEDS_CONTEXT') {
@@ -1725,6 +1748,14 @@ async function runOneTask(adv) {
   if (status === 'DONE_WITH_CONCERNS') concerns.push(extractConcernLines(implText));
 
   const ctx = { id, boundary, filesCsv, briefPath, reportPath, agentType: role, attempts: 1, concerns, baseSha };
+
+  // Snapshot before the ladders: the halt above proves `role` had not fallen
+  // back yet, but a ladder dispatch (the fix agent uses the same agentType)
+  // still can. Diffing against this snapshot is what keeps a LATE fallback of
+  // the same role visible — checking `has(role)` after the ladders would have
+  // been shadowed by the halt, and iterating the whole set would re-report an
+  // unrelated role on every remaining task.
+  const fallbacksBeforeLadders = new Set(agentTypeFallbacks);
 
   const valOutcome = await runValidateLadder(ctx);
   if (valOutcome.parked) return park(id, boundary, valOutcome.why);
@@ -1738,15 +1769,15 @@ async function runOneTask(adv) {
   // the moment the count is taken.
   const dispatches = dispatchCount - dispatchesBefore + 1;
 
-  // A silent degradation is worse than a loud one: without this the task ships
-  // with `approve` and nothing records that the role's agent never ran.
-  if (agentTypeFallbacks.has(role)) {
+  // Fallbacks that happened INSIDE the ladders (the implementer's own is a
+  // halt, above). A concern rather than a halt: the work is already reviewed
+  // by this point, and parking it would discard a finished, approved task
+  // over a validator/fix agent that degraded — but it must not be silent.
+  for (const fallen of agentTypeFallbacks) {
+    if (fallbacksBeforeLadders.has(fallen)) continue;
     ctx.concerns.push(
-      `agentType "${role}" did not dispatch — this task ran on general-purpose, WITHOUT the ` +
-        `_common.md contract (boundary rules, report format, blocker protocol) that ` +
-        `mvp:bootstrap assembled for it. Agents register at session start, so a bootstrap ` +
-        `run in this same session yields files that are not dispatchable until the next one. ` +
-        `Restart the session and re-run this task if the role's rules mattered.`,
+      `agentType "${fallen}" did not dispatch during this task's validate/review ladder and ran on `
+      + 'general-purpose instead, WITHOUT the _common.md contract mvp:bootstrap assembled for it.',
     );
   }
 
