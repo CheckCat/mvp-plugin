@@ -84,7 +84,7 @@ mvp-plugin/
   .claude/state/plan.json exists and implementation should proceed».
 - SKILL.md ссылается на свои файлы относительными markdown-ссылками; `@`-ссылки запрещены.
 - Кросс-ссылки между скиллами — по имени: `**NEXT:** Use mvp:<next>`.
-- Размер: gate-скиллы (resume, retro) 2–4 КБ; оркестраторы (build, clarify) ≤ 13 КБ SKILL.md
+- Размер: gate-скиллы (resume, retro, sync) 2–4 КБ; оркестраторы (build, clarify) ≤ 13 КБ SKILL.md
   (поднято с 12 КБ 2026-09-15 под третий backend в bootstrap — fastify/docker-compose),
   тяжёлое — в references/ («Load when: ...») и scripts/ (не грузятся в контекст).
 - Каждый скилл начинается с «Announce at start: "Using mvp:<name> to <purpose>"».
