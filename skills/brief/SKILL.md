@@ -40,7 +40,7 @@ ${CLAUDE_PLUGIN_ROOT}/skills/brief/scripts/package-brief.sh discover
 
 ## Шаг 4 — Stop&Ask по стеку
 
-Проверь `## Stack` в `<tmpdir>/technical-solutions.md`. Stop&Ask (`AskUserQuestion`, options из allowlist `backend∈{nestjs,fastapi}` / `frontend∈{nextjs,react,none}` / `deploy∈{docker-dokploy}` / `db⊇{postgresql}`) обязателен при ЛЮБОМ из:
+Проверь `## Stack` в `<tmpdir>/technical-solutions.md`. Stop&Ask (`AskUserQuestion`, options из allowlist `backend∈{nestjs,fastapi,fastify}` / `frontend∈{nextjs,react,none}` / `deploy∈{docker-dokploy,docker-compose}` / `db⊇{postgresql}`) обязателен при ЛЮБОМ из:
 
 1. **Не указан** — источники вообще не называют технологию.
 2. **Не в allowlist** — названо что-то вне списка (`spring-boot`, `vue`, ...).

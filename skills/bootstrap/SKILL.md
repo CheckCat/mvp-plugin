@@ -82,7 +82,16 @@ if [ -f package.json ]; then pnpm turbo build; fi
 if [ -f package.json ]; then pnpm turbo test; fi
 ```
 
-`frontend` (`react`/`nextjs`) **только когда `backend=fastapi`** — nestjs уже покрывает frontend через тот же pnpm/turbo workspace (`layout=packages`, см. `lib/brief-contract.sh:layout_for_stack`), отдельных команд не нужно; guard'ы `[ -d services/frontend ]` уже на месте:
+`backend=fastify` (npm workspaces в корне; frontend — workspace-пакет, покрыт root-скриптами):
+```
+set -e
+if [ -f package-lock.json ]; then npm ci; fi
+if [ -f package.json ]; then npm run lint --if-present; fi
+if [ -f package.json ]; then npm run build --if-present; fi
+if [ -f package.json ]; then npm run test --if-present; fi
+```
+
+`frontend` (`react`/`nextjs`) **только когда `backend=fastapi`** — nestjs/fastify уже покрывают frontend через свой root-workspace (см. `layout_for_stack`), отдельных команд не нужно; guard'ы `[ -d services/frontend ]` уже на месте:
 ```
 if [ -d services/frontend ]; then npm --prefix services/frontend ci; fi
 if [ -d services/frontend ]; then npm --prefix services/frontend run lint; fi
@@ -96,7 +105,7 @@ if [ -d services/frontend ]; then npm --prefix services/frontend run test -- --r
 ```
 ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/assemble-agent.sh <role> [stack]
 ```
-Только роли из enum `role` в `skills/plan/references/plan-schema.json` — по ним `mvp:build` диспатчит агентов (`agentType`). Всегда: `backend-implementer <backend>`, `devops-engineer docker-dokploy.<backend>`, `test-writer <backend>`. Плюс `frontend-implementer <frontend>` при `frontend != none` и `integration-specialist`, если brief называет сервисы `integration-*`. Ролей `validator`/`code-reviewer` нет — эти шаги гоняются инлайн-шаблонами `skills/build/agents/*.md`. `TEMPLATES_DIR`/`OUT_DIR` не трогай.
+Только роли из enum `role` в `skills/plan/references/plan-schema.json` — по ним `mvp:build` диспатчит агентов (`agentType`). Всегда: `backend-implementer <backend>`, `devops-engineer <deploy>.<backend>` (`<deploy>` — из `## Stack`), `test-writer <backend>`. Плюс `frontend-implementer <frontend>` при `frontend != none` и `integration-specialist`, если brief называет сервисы `integration-*`. Ролей `validator`/`code-reviewer` нет — эти шаги гоняются инлайн-шаблонами `skills/build/agents/*.md`. `TEMPLATES_DIR`/`OUT_DIR` не трогай.
 
 Затем ОБЯЗАТЕЛЬНО:
 ```

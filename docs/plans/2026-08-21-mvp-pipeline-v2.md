@@ -15,10 +15,10 @@
 - **Iron Law:** LLM думает — скрипты двигают данные. Операция с однозначным результатом = скрипт с exit-code, не инструкция модели.
 - **Контракт вывода скриптов:** последняя строка stdout — одна строка JSON `{"ok":bool,"reason":str|null,"hint":str|null,"data":object|null}`. Ошибка → `ok:false` + exit code 1. Никакого другого формата.
 - **Frontmatter скиллов:** ровно два поля `name`, `description`; description — ТОЛЬКО триггер («Use when …»), никогда workflow. Суммарно ≤ 1024 символов.
-- **Размеры:** SKILL.md ≤ 12 КБ для оркестраторов (build, clarify), ≤ 4 КБ для gate-скиллов (resume, retro). Тяжёлое — в `references/` («Load when: …») и `scripts/`.
+- **Размеры:** SKILL.md ≤ 13 КБ для оркестраторов (build, clarify; поднято с 12 КБ 2026-09-15 под третий backend в bootstrap), ≤ 4 КБ для gate-скиллов (resume, retro). Тяжёлое — в `references/` («Load when: …») и `scripts/`.
 - **Коммиты:** только через `lib/finalize.sh` в целевых проектах; в самом репо плагина — обычный git, explicit staging (никогда `git add -A`), prefix ∈ {feat, fix, docs, test, chore, refactor}.
 - **Тесты:** каждый lib-скрипт имеет `tests/lib/<name>.test.sh`; тест создаёт tmpdir-фикстуру, зовёт скрипт, проверяет JSON-выход; exit 0 = pass. `tests/run.sh` гоняет все. Зависимости окружения: bash, git, python3, node — ничего больше.
-- **Allowlist стеков (verbatim из спеки):** backend ∈ {nestjs, fastapi}; frontend ∈ {nextjs, react, none}; deploy ∈ {docker-dokploy}; db = postgresql (+ опц. redis, timescaledb).
+- **Allowlist стеков (verbatim из спеки):** backend ∈ {nestjs, fastapi, fastify}; frontend ∈ {nextjs, react, none}; deploy ∈ {docker-dokploy, docker-compose}; db = postgresql (+ опц. redis, timescaledb). (fastify + docker-compose добавлены 2026-09-15 по запросу оператора — локальный Node-стек без внешней deploy-платформы.)
 - **Пути:** плагин — `~/Documents/tools/claude/mvp-plugin`. Состояние целевого проекта — `.claude/state/{plan.json,state.json,ledger.md,invariants.md,ci-mirror.sh,briefs/,reports/,review/,telemetry/}`.
 - **Никакой vireo-специфики** в файлах плагина: `grep -ri vireo` по репо (вне docs/observations) обязан быть пустым.
 

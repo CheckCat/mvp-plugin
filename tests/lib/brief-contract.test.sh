@@ -98,6 +98,17 @@ if ! echo "$out_c" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert
   fail=1
 fi
 
+# --- (c2) validate_stack fastify react docker-compose postgresql -> 0 ------
+
+out_c2="$(validate_stack fastify react docker-compose postgresql)"
+rc_c2=$?
+assert_eq "(c2) validate_stack fastify/docker-compose exit code" "0" "$rc_c2"
+if ! echo "$out_c2" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["ok"] is True' 2>/tmp/mvp-bc-test-err; then
+  echo "FAIL: (c2) validate_stack output is not valid ok:true JSON: $out_c2" >&2
+  cat /tmp/mvp-bc-test-err >&2
+  fail=1
+fi
+
 # --- (d) validate_stack django ... -> exit 1 --------------------------------
 
 out_d="$(validate_stack django react docker-dokploy postgresql)"
@@ -125,5 +136,7 @@ fi
 assert_eq "layout_for_stack fastapi react 3" "services" "$(layout_for_stack fastapi react 3)"
 assert_eq "layout_for_stack fastapi react 1" "app" "$(layout_for_stack fastapi react 1)"
 assert_eq "layout_for_stack nestjs nextjs 2" "packages" "$(layout_for_stack nestjs nextjs 2)"
+assert_eq "layout_for_stack fastify react 3" "services" "$(layout_for_stack fastify react 3)"
+assert_eq "layout_for_stack fastify react 1" "app" "$(layout_for_stack fastify react 1)"
 
 exit $fail

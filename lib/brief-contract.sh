@@ -96,8 +96,8 @@ validate_headers() {
 # Stack allowlist + layout mapping
 # ---------------------------------------------------------------------------
 
-ALLOWED_BACKEND="nestjs fastapi"; ALLOWED_FRONTEND="nextjs react none"
-ALLOWED_DEPLOY="docker-dokploy"
+ALLOWED_BACKEND="nestjs fastapi fastify"; ALLOWED_FRONTEND="nextjs react none"
+ALLOWED_DEPLOY="docker-dokploy docker-compose"
 validate_stack() { # $1 backend $2 frontend $3 deploy $4 db csv
   local errs=()
   case " $ALLOWED_BACKEND "  in *" $1 "*) ;; *) errs+=("backend '$1' not in [$ALLOWED_BACKEND]");; esac

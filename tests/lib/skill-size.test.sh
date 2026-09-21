@@ -20,8 +20,10 @@ fail=0
 
 # gate skills: 2–4 KB (spec). Short, terminal, read in full every time.
 GATE_MAX=4096
-# orchestrators: <= 10–12 KB (spec). The upper bound is the hard one.
-ORCH_MAX=12288
+# orchestrators: <= 13 KB (spec). The upper bound is the hard one.
+# Raised 12288 -> 13312 (2026-09-15): bootstrap gained the fastify/docker-compose
+# stack mapping (third backend in ci-mirror + generalized devops template name).
+ORCH_MAX=13312
 
 check_size() { # <path> <max> <label>
   local path="$1" max="$2" label="$3" size
