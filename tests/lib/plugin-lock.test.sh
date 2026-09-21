@@ -42,6 +42,8 @@ make_fake_plugin() { # <dir>
     > "$p/skills/bootstrap/templates/devops-engineer.docker-compose.fastify.template.md"
   printf -- '---\nname: integration-specialist\ndescription: d\ntools: Read\n---\n\nBODY integ v1\n' \
     > "$p/skills/bootstrap/templates/integration-specialist.template.md"
+  printf -- '---\nname: test-writer\ndescription: d\ntools: Read\n---\n\nBODY test-writer v1\n' \
+    > "$p/skills/bootstrap/templates/test-writer.fastify.template.md"
   printf 'SKILL bootstrap v1\n' > "$p/skills/bootstrap/SKILL.md"
   printf 'SKILL build v1\n'     > "$p/skills/build/SKILL.md"
   printf 'echo hi\n'            > "$p/lib/validate-task.sh"
@@ -97,11 +99,35 @@ assert_eq "test 8: шаблон без стека" "integration-specialist.templ
   "$(jq_py "$lock8" 'd["derived"][".claude/agents/integration-specialist.md"]["template"]')"
 
 # --- Test 8b: record при отсутствующем собранном агенте — ok:false ---------
+# Шаблон test-writer.fastify.template.md существует (см. make_fake_plugin),
+# поэтому падение должно случиться именно на отсутствии .claude/agents/test-writer.md,
+# а не раньше — на отсутствии шаблона. Иначе тест проверяет не ту ветку.
 
 out8b="$(cd "$t1_proj" && PLUGIN_ROOT="$t1_plugin" \
   bash "$LOCK_SH" record test-writer fastify 2>/dev/null)"
 rc8b=$?
 assert_eq "test 8b: exit" "1" "$rc8b"
 assert_eq "test 8b: ok" "False" "$(jq_py "$(last_line "$out8b")" 'd["ok"]')"
+assert_eq "test 8b: reason про отсутствующий собранный агент" "True" \
+  "$(jq_py "$(last_line "$out8b")" '"assembled agent missing" in d["reason"]')"
+
+# --- Test 9: record с несуществующим стеком сбрасывает stack в "" ----------
+# integration-specialist уже собран (.claude/agents/integration-specialist.md
+# создан для Test 8). Запрашиваем заведомо отсутствующий стек: стекового
+# шаблона <role>.<stack>.template.md нет, есть только общий <role>.template.md —
+# запись обязана указывать на общий шаблон с обнулённым stack, а не хранить
+# запрошенный "nosuchstack".
+
+out9="$(cd "$t1_proj" && PLUGIN_ROOT="$t1_plugin" \
+  bash "$LOCK_SH" record integration-specialist nosuchstack 2>/dev/null)"
+rc9=$?
+assert_eq "test 9: exit" "0" "$rc9"
+assert_eq "test 9: ok" "True" "$(jq_py "$(last_line "$out9")" 'd["ok"]')"
+
+lock9="$(cat "$t1_proj/.mvp/plugin-lock.json")"
+assert_eq "test 9: stack сброшен" "" \
+  "$(jq_py "$lock9" 'd["derived"][".claude/agents/integration-specialist.md"]["stack"]')"
+assert_eq "test 9: template общий" "integration-specialist.template.md" \
+  "$(jq_py "$lock9" 'd["derived"][".claude/agents/integration-specialist.md"]["template"]')"
 
 exit $fail
