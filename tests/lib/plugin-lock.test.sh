@@ -93,6 +93,16 @@ assert_eq "test 1: plugin.version" "9.9.9" "$(jq_py "$lock1" 'd["plugin"]["versi
 assert_eq "test 1: normative пуста" "0" "$(jq_py "$lock1" 'len(d["normative"])')"
 
 # --- Test 8: record одной роли не ломает записи остальных ------------------
+# Спека §11 случай 8 требует ОБЕ половины: derived остальных ролей И
+# normative не изменились. Normative запечатывается ЗДЕСЬ, до record второй
+# роли, и должна быть непустой — иначе "record её не трогает" сравнивало бы
+# {} с {} и не покраснело бы на мутации lock.setdefault("normative", {}) ->
+# lock["normative"] = {} в record (см. task-9-brief.md, находка 4).
+
+(cd "$t1_proj" && PLUGIN_ROOT="$t1_plugin" bash "$LOCK_SH" seal >/dev/null 2>&1)
+normative_before8="$(jq_py "$(cat "$t1_proj/.mvp/plugin-lock.json")" 'json.dumps(d["normative"], sort_keys=True)')"
+assert_eq "test 8: normative до record непуста (иначе тест ничего не проверяет)" "True" \
+  "$(jq_py "$(cat "$t1_proj/.mvp/plugin-lock.json")" 'len(d["normative"]) > 0')"
 
 printf 'ASSEMBLED integ\n' > "$t1_proj/.claude/agents/integration-specialist.md"
 (cd "$t1_proj" && PLUGIN_ROOT="$t1_plugin" bash "$LOCK_SH" record integration-specialist >/dev/null 2>&1)
@@ -105,6 +115,8 @@ assert_eq "test 8: роль без стека" "" \
   "$(jq_py "$lock8" 'd["derived"][".claude/agents/integration-specialist.md"]["stack"]')"
 assert_eq "test 8: шаблон без стека" "integration-specialist.template.md" \
   "$(jq_py "$lock8" 'd["derived"][".claude/agents/integration-specialist.md"]["template"]')"
+normative_after8="$(jq_py "$lock8" 'json.dumps(d["normative"], sort_keys=True)')"
+assert_eq "test 8: normative не тронута record'ом" "$normative_before8" "$normative_after8"
 
 # --- Test 8b: record при отсутствующем собранном агенте — ok:false ---------
 # Шаблон test-writer.fastify.template.md существует (см. make_fake_plugin),
