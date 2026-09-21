@@ -343,6 +343,51 @@ assert_eq "gate-lock: нормативка НЕ валит" "True" "$(json_field
 assert_eq "gate-lock: нормативка попала в data" "skills/build/SKILL.md" \
   "$(json_field "$g_norm" 'd["data"]["normative_changed"][0]')"
 
+# --- plugin-lock: halt срабатывает на КАЖДЫЙ hard-класс, не только stale ---
+# Правка 6а: мутация "оставить в halt-кортеже только stale" не красит эти
+# три случая — tampered/missing/unstamped независимые ветки policy в
+# gate_build (lib/gate.sh), и каждая нуждается в своём негативном контроле.
+
+# tampered: агент руками поправлен, sources в lock не менялись.
+printf 'ASSEMBLED devops — HAND EDITED\n' > "$gl_proj/.claude/agents/devops-engineer.md"
+g_tampered="$(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: tampered валит" "False" "$(json_field "$g_tampered" 'd["ok"]')"
+if ! echo "$g_tampered" | grep -q "hand-edited"; then
+  echo "FAIL: gate-lock: tampered reason не про hand-edited: $g_tampered" >&2
+  fail=1
+fi
+# восстановить байты — содержимое совпадает с тем, что было в момент record
+# (строка 311 ниже по файлу), новый output_sha256 не нужен.
+printf 'ASSEMBLED devops\n' > "$gl_proj/.claude/agents/devops-engineer.md"
+
+# missing: роль ЕСТЬ в lock, но НЕ входит в plan.json tasks — иначе более
+# ранняя проверка gate_build ("no agent file for role(s)") перехватила бы
+# её первой, так и не добравшись до плагин-лока (plan.json здесь ссылается
+# только на devops-engineer).
+printf -- '---\nname: integration-specialist\ndescription: d\ntools: Read\n---\n\nBODY integ v1\n' \
+  > "$gl_plugin/skills/bootstrap/templates/integration-specialist.template.md"
+printf 'ASSEMBLED integ\n' > "$gl_proj/.claude/agents/integration-specialist.md"
+(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/plugin-lock.sh" \
+   record integration-specialist >/dev/null 2>&1)
+rm "$gl_proj/.claude/agents/integration-specialist.md"
+g_missing="$(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: missing валит" "False" "$(json_field "$g_missing" 'd["ok"]')"
+if ! echo "$g_missing" | grep -q "missing"; then
+  echo "FAIL: gate-lock: missing reason не про missing: $g_missing" >&2
+  fail=1
+fi
+
+# unstamped: файл лежит в OUT_DIR, роль вне plan.json, записи в lock нет
+# вовсе (не record — просто файл).
+printf 'ORPHAN\n' > "$gl_proj/.claude/agents/orphan-role.md"
+g_unstamped="$(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: unstamped валит" "False" "$(json_field "$g_unstamped" 'd["ok"]')"
+if ! echo "$g_unstamped" | grep -q "unstamped"; then
+  echo "FAIL: gate-lock: unstamped reason не про unstamped: $g_unstamped" >&2
+  fail=1
+fi
+rm "$gl_proj/.claude/agents/orphan-role.md"
+
 # Отсутствие lock при наличии агентов — валит
 rm "$gl_proj/.mvp/plugin-lock.json"
 g_nolock="$(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
@@ -382,5 +427,29 @@ if ! grep -q "plugin-lock" "$gl_skip_err"; then
   echo "FAIL: gate-lock: skip-ветка молчит на stderr: $(cat "$gl_skip_err")" >&2
   fail=1
 fi
+
+# --- plugin-lock: skip-ветка на валидном JSON, который НЕ объект -----------
+# Правка 5а: `d.get(...)` в вердикт-блоке раньше не проверял тип r/d перед
+# .get() — валидный JSON вида "[1,2,3]" или "null" не кидает json.loads,
+# кидает AttributeError на r.get(...) ПОСЛЕ него. Без type-guard вердикт-
+# скрипт падает молча, $lv остаётся пустым, ни одна ветка (halt/warn/skip)
+# не срабатывает, и до правки build печатал ok:true с data:null БЕЗ
+# диагностики на stderr — молча промахиваясь в небезопасную сторону.
+# Проверяем обеими сторонами, как и в тесте выше: ok:true И непустой stderr.
+for payload in '[1,2,3]' 'null'; do
+  gl_lib_nonobj="$tmproot/gate-lock-nonobj-$(printf '%s' "$payload" | tr -dc 'a-z0-9')"
+  cp -r "$repo_root/lib" "$gl_lib_nonobj"
+  printf '#!/usr/bin/env bash\necho '"'"'%s'"'"'\n' "$payload" > "$gl_lib_nonobj/plugin-lock.sh"
+  chmod +x "$gl_lib_nonobj/plugin-lock.sh"
+
+  gl_nonobj_err="$tmproot/gate-lock-nonobj-stderr-$(printf '%s' "$payload" | tr -dc 'a-z0-9').txt"
+  g_nonobj="$(cd "$gl_proj" && "$gl_lib_nonobj/gate.sh" build 2>"$gl_nonobj_err" | tail -n1)"
+  assert_eq "gate-lock: non-object payload ($payload) не валит build" "True" \
+    "$(json_field "$g_nonobj" 'd["ok"]')"
+  if ! grep -q "plugin-lock" "$gl_nonobj_err"; then
+    echo "FAIL: gate-lock: non-object payload ($payload) молчит на stderr: $(cat "$gl_nonobj_err")" >&2
+    fail=1
+  fi
+done
 
 exit $fail

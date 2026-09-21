@@ -287,6 +287,18 @@ for pattern in os.environ["PL_GLOBS"].split():
     for path in sorted(plugin_root.glob(pattern)):
         if path.is_file():
             norm[str(path.relative_to(plugin_root))] = sha(path)
+
+if not norm:
+    # sealed:0 would read as "operator reviewed and accepted zero files" —
+    # but an empty normative set here means PLUGIN_ROOT points somewhere
+    # without a plugin, not that the plugin genuinely has no normative
+    # files (the globs always match lib/* and skills/*/SKILL.md when
+    # PLUGIN_ROOT is correct). Silently writing an empty acceptance is
+    # worse than refusing.
+    print(json.dumps({"ok": False, "reason": "normative file set is empty — PLUGIN_ROOT likely wrong: %s" % plugin_root,
+                      "hint": "check PLUGIN_ROOT / plugin install", "data": None}))
+    sys.exit(1)
+
 lock["normative"] = norm
 
 try:

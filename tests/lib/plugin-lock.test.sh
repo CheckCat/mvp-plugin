@@ -390,6 +390,26 @@ assert_eq "test 12: находка несёт только path" '["path"]' \
 assert_eq "test 12: reason называет unstamped" "True" \
   "$(jq_py "$c12" '"unstamped" in d["reason"]')"
 
+# --- Test 13: провал record внутри assemble-agent.sh даёт ok:false ---------
+# Спека §6: assemble-agent.sh не считается успешным, если запись в lock не
+# состоялась — файл агента написан, но контракт всё равно ok:false. Ломаем
+# именно record: кладём в проект битый .mvp/plugin-lock.json ДО сборки, все
+# остальные предпосылки (шаблоны, _common.md) валидны.
+
+p13="$tmpdir/t13-plugin"; j13="$tmpdir/t13-proj"
+make_fake_plugin "$p13"; make_fake_project "$j13"
+printf '{not valid json' > "$j13/.mvp/plugin-lock.json"
+
+out13="$(cd "$j13" && PLUGIN_ROOT="$p13" \
+  TEMPLATES_DIR="$p13/skills/bootstrap/templates" \
+  bash "$ASSEMBLE_SH" devops-engineer docker-compose.fastify 2>/dev/null)"
+rc13=$?
+assert_eq "test 13: assemble exit" "1" "$rc13"
+assert_eq "test 13: assemble ok:false" "False" "$(jq_py "$(last_line "$out13")" 'd["ok"]')"
+assert_eq "test 13: reason называет provал record" "True" \
+  "$(jq_py "$(last_line "$out13")" '"plugin-lock record failed" in d["reason"]')"
+assert_eq "test 13: файл агента всё же написан (идемпотентный перезапуск)" "True" \
+  "$([ -f "$j13/.claude/agents/devops-engineer.md" ] && echo True || echo False)"
 
 # --- Test 14: lock_broken — свой reason и своё поле в data, отличные от
 # отсутствующего файла (спека §5.2 / §7; Шаг 2 mvp:sync иначе диспетчерит
@@ -411,5 +431,36 @@ assert_eq "test 14: reason называет валидность JSON" "True" \
 # уже проверяет ту ветку целиком; здесь только новое поле).
 assert_eq "test 14b: файла нет -> lock_broken:false" "False" "$(jq_py "$c6" 'd["data"]["lock_broken"]')"
 
+# --- Test 15: seal с пустой нормативкой — отказ, не sealed:0 ---------------
+# Правка 5б: PLUGIN_ROOT указывает на каталог без файлов под NORMATIVE_GLOBS
+# (например переопределён неверно) — раньше seal писал lock["normative"]={}
+# и отдавал ok:true, sealed:0, что читается как "оператор прочитал и принял
+# нормативку", хотя принимать было нечего. Пустой каталог с одним лишним
+# файлом (не попадающим ни под один глоб) — реалистичная имитация неверного
+# PLUGIN_ROOT, а не просто "каталога нет вовсе" (та ветка не про этот баг).
+
+p15="$tmpdir/t15-plugin"; j15="$tmpdir/t15-proj"
+mkdir -p "$p15/not-a-plugin-dir"
+printf 'irrelevant\n' > "$p15/not-a-plugin-dir/readme.txt"
+make_fake_project "$j15"
+
+out15="$(cd "$j15" && PLUGIN_ROOT="$p15" bash "$LOCK_SH" seal 2>/dev/null)"
+rc15=$?
+assert_eq "test 15: seal exit" "1" "$rc15"
+assert_eq "test 15: seal ok:false" "False" "$(jq_py "$(last_line "$out15")" 'd["ok"]')"
+assert_eq "test 15: reason называет пустую нормативку" "True" \
+  "$(jq_py "$(last_line "$out15")" '"normative" in d["reason"].lower()')"
+assert_eq "test 15: lock-файл не создан (нечего запечатывать)" "False" \
+  "$([ -f "$j15/.mvp/plugin-lock.json" ] && echo True || echo False)"
+
+# обратный контроль: реальный плагин (make_fake_plugin) даёт непустую
+# нормативку и ok:true — та же фикстура, что и во всех остальных тестах.
+p15b="$tmpdir/t15b-plugin"; j15b="$tmpdir/t15b-proj"
+make_fake_plugin "$p15b"; make_fake_project "$j15b"
+out15b="$(cd "$j15b" && PLUGIN_ROOT="$p15b" bash "$LOCK_SH" seal 2>/dev/null)"
+assert_eq "test 15b: реальный плагин — seal ok:true" "True" \
+  "$(jq_py "$(last_line "$out15b")" 'd["ok"]')"
+assert_eq "test 15b: sealed > 0" "True" \
+  "$(jq_py "$(last_line "$out15b")" 'd["data"]["sealed"] > 0')"
 
 exit $fail

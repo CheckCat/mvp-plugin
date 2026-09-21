@@ -317,14 +317,19 @@ import json, os, sys
 raw = os.environ.get("GB_J") or ""
 try:
     r = json.loads(raw)
+    if not isinstance(r, dict):
+        raise ValueError("plugin-lock.sh check payload is not a JSON object")
 except ValueError:
-    # Скрипт не отдал контракт (нет python3? снесли файл?). Молча пропускать
+    # Скрипт не отдал контракт (нет python3? снесли файл? отдал валидный
+    # JSON, но не объект — например [1,2,3] или null). Молча пропускать
     # нельзя, но и валить build из-за сломанного диагноста — хуже: сам гейт
     # тогда становится точкой отказа. Пропускаем, назвав причину.
     print(json.dumps({"verdict": "skip", "reason": "plugin-lock.sh gave no JSON contract"}))
     sys.exit(0)
 
 d = r.get("data") or {}
+if not isinstance(d, dict):
+    d = {}
 if d.get("lock_present") is False:
     if os.environ.get("GB_AGENTS_PRESENT") == "true":
         reason = ("plugin-lock.json exists but is not valid JSON — cannot tell if agents match the plugin"
@@ -356,7 +361,14 @@ print(json.dumps({"verdict": "clean"}))
 ')"
 
   local lv
-  lv="$(GB_V="$lock_verdict" python3 -c 'import json,os; print(json.loads(os.environ["GB_V"])["verdict"])')"
+  lv="$(GB_V="$lock_verdict" python3 -c '
+import json, os
+try:
+    d = json.loads(os.environ.get("GB_V") or "")
+except Exception:
+    d = None
+print(d["verdict"] if isinstance(d, dict) and "verdict" in d else "skip")
+')"
   if [ "$lv" = "halt" ]; then
     local lock_reason
     lock_reason="$(GB_V="$lock_verdict" python3 -c 'import json,os; print(json.loads(os.environ["GB_V"])["reason"])')"
@@ -374,7 +386,14 @@ print(json.dumps({"verdict": "clean"}))
     # причина обязана быть видна оператору хоть где-то (stderr — единственное
     # доступное место, stdout зарезервирован под JSON-контракт).
     local skip_reason
-    skip_reason="$(GB_V="$lock_verdict" python3 -c 'import json,os; print(json.loads(os.environ["GB_V"])["reason"])')"
+    skip_reason="$(GB_V="$lock_verdict" python3 -c '
+import json, os
+try:
+    d = json.loads(os.environ.get("GB_V") or "")
+except Exception:
+    d = None
+print(d.get("reason") if isinstance(d, dict) and d.get("reason") else "plugin-lock verdict unavailable")
+')"
     echo "gate build: plugin-lock check skipped — $skip_reason" >&2
   fi
 
