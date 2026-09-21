@@ -19,6 +19,8 @@ ${CLAUDE_PLUGIN_ROOT}/lib/plugin-lock.sh check
 
 `ok:true` → скажи «проект соответствует плагину», останови скилл.
 
+`data.lock_broken:true` → [references/sync-handbook.md](references/sync-handbook.md) (**Load when:** lock не парсится).
+
 ## Шаг 2 — нет отметки (`lock_present:false`)
 
 Stop&Ask: роли `.claude/agents/*.md`, стек — `## Stack` (`docs/product/technical-solutions.md`); жди подтверждения.

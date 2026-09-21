@@ -165,7 +165,7 @@ def sha(path):
     return "sha256:" + hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
 
 empty = {
-    "lock_present": False,
+    "lock_present": False, "lock_broken": False,
     "derived_stale": [], "derived_tampered": [], "derived_missing": [],
     "derived_unstamped": [],
     "normative_changed": [], "normative_added": [], "normative_removed": [],
@@ -179,9 +179,9 @@ except FileNotFoundError:
                       "data": empty}))
     sys.exit(1)
 except ValueError:
-    print(json.dumps({"ok": False, "reason": "plugin-lock.json is not valid JSON",
+    print(json.dumps({"ok": False, "reason": "plugin-lock.json exists but is not valid JSON",
                       "hint": "delete it and run mvp:sync — it is regenerable",
-                      "data": empty}))
+                      "data": dict(empty, lock_broken=True)}))
     sys.exit(1)
 
 data = dict(empty, lock_present=True)

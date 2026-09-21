@@ -379,4 +379,25 @@ assert_eq "test 12: reason называет unstamped" "True" \
   "$(jq_py "$c12" '"unstamped" in d["reason"]')"
 
 
+# --- Test 14: lock_broken — свой reason и своё поле в data, отличные от
+# отсутствующего файла (спека §5.2 / §7; Шаг 2 mvp:sync иначе диспетчерит
+# "нет отметки" туда, где отметка есть, но не читается).
+
+p14="$tmpdir/t14-plugin"; j14="$tmpdir/t14-proj"
+make_fake_plugin "$p14"; make_fake_project "$j14"
+printf '{not valid json at all' > "$j14/.mvp/plugin-lock.json"
+c14="$(run_check "$p14" "$j14")"
+assert_eq "test 14: ok:false" "False" "$(jq_py "$c14" 'd["ok"]')"
+assert_eq "test 14: lock_present:false" "False" "$(jq_py "$c14" 'd["data"]["lock_present"]')"
+assert_eq "test 14: lock_broken:true" "True" "$(jq_py "$c14" 'd["data"]["lock_broken"]')"
+assert_eq "test 14: reason отличается от отсутствующего файла" "True" \
+  "$(jq_py "$c14" 'd["reason"] != "no plugin-lock.json"')"
+assert_eq "test 14: reason называет валидность JSON" "True" \
+  "$(jq_py "$c14" '"JSON" in d["reason"]')"
+
+# обратный контроль: файла действительно нет -> lock_broken:false (test 6
+# уже проверяет ту ветку целиком; здесь только новое поле).
+assert_eq "test 14b: файла нет -> lock_broken:false" "False" "$(jq_py "$c6" 'd["data"]["lock_broken"]')"
+
+
 exit $fail

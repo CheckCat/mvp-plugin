@@ -194,6 +194,7 @@ Upsert одной записи в `derived`. Вычисляет `sources`, `outp
 ```json
 {
   "lock_present": true,
+  "lock_broken": false,
   "derived_stale":     [{"path": "…", "role": "…", "stack": "…",
                          "changed_sources": ["…"]}],
   "derived_tampered":  [{"path": "…", "role": "…", "stack": "…"}],
@@ -222,7 +223,13 @@ Upsert одной записи в `derived`. Вычисляет `sources`, `outp
 
 Отсутствие lock-файла при наличии `.claude/agents/*.md` — отдельный
 `reason` (`no plugin-lock.json`), не смешанный с дрейфом: это не «проект
-устарел», а «сравнить не с чем».
+устарел», а «сравнить не с чем». `lock_present: false` покрывает и случай,
+когда файла нет вовсе, и случай, когда файл есть, но не парсится как JSON —
+эти два `reason` различны текстуально, но неразличимы диспетчером, который
+судит только по булеву флагу. `lock_broken: true` — отдельное поле именно
+для второго случая (файл существует, но битый); `false` — во всех
+остальных, включая штатный `lock_present: true`. Не смешивать с `tampered`:
+`tampered` — про собранный агент, `lock_broken` — про сам lock-файл.
 
 ### 5.3. `seal`
 
@@ -257,7 +264,8 @@ Upsert одной записи в `derived`. Вычисляет `sources`, `outp
 **Расхождение в `derived` (`stale`/`tampered`/`missing`/`unstamped`) → гейт
 даёт `ok:false`, halt.** `reason` называет роли (`unstamped` — путь, роли у
 него нет), `hint` — `run mvp:sync`. Сюда же попадает `lock_present: false`
-при наличии `.claude/agents/*.md`.
+при наличии `.claude/agents/*.md` — с `reason`, честно называющим причину
+(«нет файла» либо «файл битый», по `lock_broken`, §5.2).
 
 **Расхождение только в `normative` → гейт даёт `ok:true`**, плюс
 `normative_changed` в `data`. `skills/build/SKILL.md` обязан показать
@@ -282,11 +290,16 @@ Iron Law: **чинится только производное; норматив
 ```
 Шаг 1. plugin-lock.sh check
 Шаг 2. ok:true → «всё актуально», стоп.
-Шаг 3. lock отсутствует (lock_present:false) → Stop&Ask: перечислить роли
-       из .claude/agents/, предложить стеки из `## Stack` брифа, дождаться
-       подтверждения. Не угадывать: стек не хранится машинно-читаемо,
-       угадывание по description — эвристика, её ошибка молча даёт не
-       того агента.
+       lock_broken:true → lock есть, но не парсится: сказать оператору
+       удалить .mvp/plugin-lock.json и перезапустить mvp:sync (файл
+       регенерируем целиком из хэшей плагина, это безопасно), стоп. Не
+       путать с lock_present:false (файла нет вовсе) — разное лечение,
+       разный Шаг 3.
+Шаг 3. lock отсутствует (lock_present:false, lock_broken:false) →
+       Stop&Ask: перечислить роли из .claude/agents/, предложить стеки из
+       `## Stack` брифа, дождаться подтверждения. Не угадывать: стек не
+       хранится машинно-читаемо, угадывание по description — эвристика,
+       её ошибка молча даёт не того агента.
 Шаг 4. роли для пересборки: lock отсутствовал на Шаге 3 → derived_*
        пусты по построению, берётся весь список, подтверждённый на Шаге 3;
        иначе — derived_stale/derived_tampered/derived_missing/
@@ -298,9 +311,11 @@ Iron Law: **чинится только производное; норматив
        есть и плагин — git-чекаут, показать `git diff <sha>..HEAD -- <пути>`
 Шаг 7. Stop&Ask по нормативке: требует ли изменение правок в проекте.
        Требует — это отдельная работа, не работа sync'а:
-       plan-io.mjs add-task.
+       plan-io.mjs add-task (пишет .mvp/plan.json).
 Шаг 8. plugin-lock.sh seal — только после подтверждения оператора
-Шаг 9. finalize.sh sync <msg-file>
+Шаг 9. finalize.sh sync <msg-file>; заводилась задача на Шаге 7 →
+       добавить --files .mvp/plan.json (пресет sync иначе не подхватит
+       plan.json, и следующий gate build упадёт на «not committed»)
 ```
 
 HARD-GATE: если на Шаге 4 пересобран хоть один агент — дословное требование

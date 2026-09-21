@@ -327,8 +327,10 @@ except ValueError:
 d = r.get("data") or {}
 if d.get("lock_present") is False:
     if os.environ.get("GB_AGENTS_PRESENT") == "true":
-        print(json.dumps({"verdict": "halt",
-                          "reason": "no .mvp/plugin-lock.json — cannot tell if agents match the plugin"}))
+        reason = ("plugin-lock.json exists but is not valid JSON — cannot tell if agents match the plugin"
+                   if d.get("lock_broken") is True else
+                   "no .mvp/plugin-lock.json — cannot tell if agents match the plugin")
+        print(json.dumps({"verdict": "halt", "reason": reason}))
     else:
         print(json.dumps({"verdict": "clean"}))
     sys.exit(0)
