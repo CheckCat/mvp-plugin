@@ -44,6 +44,13 @@ print(json.dumps({"ok": ok, "reason": reason, "hint": hint, "data": data}))
 '
 }
 
+# Состав нормативки — глобами, не списком: новый файл плагина попадает под
+# наблюдение сам. Список был бы третьим источником правды рядом с кодом и
+# шаблонами и начал бы врать с первого забытого обновления (спека §4.4).
+# Намеренно снаружи: skills/*/agents/*, skills/*/references/* (меняют
+# поведение плагина, но не требуют изменений в проекте), docs/, tests/.
+NORMATIVE_GLOBS='skills/*/SKILL.md skills/*/scripts/* lib/*'
+
 cmd="${1:-}"; shift || true
 
 case "$cmd" in
@@ -147,7 +154,7 @@ print(json.dumps({"ok": True, "reason": None, "hint": None,
     exit $?
     ;;
   check)
-    PL_PLUGIN_ROOT="$PLUGIN_ROOT" PL_LOCK="$LOCK" python3 -c '
+    PL_PLUGIN_ROOT="$PLUGIN_ROOT" PL_LOCK="$LOCK" PL_GLOBS="$NORMATIVE_GLOBS" python3 -c '
 import hashlib, json, os, pathlib, sys
 
 plugin_root = pathlib.Path(os.environ["PL_PLUGIN_ROOT"])
@@ -176,6 +183,20 @@ except ValueError:
     sys.exit(1)
 
 data = dict(empty, lock_present=True)
+
+def normative_map():
+    found = {}
+    for pattern in os.environ["PL_GLOBS"].split():
+        for path in sorted(plugin_root.glob(pattern)):
+            if path.is_file():
+                found[str(path.relative_to(plugin_root))] = sha(path)
+    return found
+
+want_norm = lock.get("normative", {})
+have_norm = normative_map()
+data["normative_changed"]  = sorted(k for k in want_norm if k in have_norm and have_norm[k] != want_norm[k])
+data["normative_added"]    = sorted(k for k in have_norm if k not in want_norm)
+data["normative_removed"]  = sorted(k for k in want_norm if k not in have_norm)
 
 for out_path, entry in sorted(lock.get("derived", {}).items()):
     role  = entry.get("role")
@@ -209,12 +230,70 @@ if data["derived_tampered"]:
 if data["derived_missing"]:
     problems.append("%d agent file(s) missing" % len(data["derived_missing"]))
 
+n_drift = len(data["normative_changed"]) + len(data["normative_added"]) + len(data["normative_removed"])
+if n_drift:
+    problems.append("%d normative file(s) changed in plugin" % n_drift)
+
 if problems:
     print(json.dumps({"ok": False, "reason": "; ".join(problems),
                       "hint": "run mvp:sync", "data": data}))
     sys.exit(1)
 
 print(json.dumps({"ok": True, "reason": None, "hint": None, "data": data}))
+'
+    exit $?
+    ;;
+  seal)
+    PL_PLUGIN_ROOT="$PLUGIN_ROOT" PL_LOCK="$LOCK" PL_GLOBS="$NORMATIVE_GLOBS" \
+    PL_GIT_SHA="$GIT_SHA" python3 -c '
+import hashlib, json, os, pathlib, sys, tempfile
+
+plugin_root = pathlib.Path(os.environ["PL_PLUGIN_ROOT"])
+lock_path   = pathlib.Path(os.environ["PL_LOCK"])
+
+def sha(path):
+    return "sha256:" + hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+
+try:
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+except FileNotFoundError:
+    lock = {}
+except ValueError:
+    print(json.dumps({"ok": False, "reason": "plugin-lock.json is not valid JSON",
+                      "hint": "delete it and run mvp:sync — it is regenerable",
+                      "data": None}))
+    sys.exit(1)
+
+lock.setdefault("lock_version", 1)
+lock.setdefault("derived", {})
+
+norm = {}
+for pattern in os.environ["PL_GLOBS"].split():
+    for path in sorted(plugin_root.glob(pattern)):
+        if path.is_file():
+            norm[str(path.relative_to(plugin_root))] = sha(path)
+lock["normative"] = norm
+
+try:
+    meta = json.loads((plugin_root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+except Exception:
+    meta = {}
+lock["plugin"] = {
+    "name": meta.get("name"),
+    "version": meta.get("version"),
+    "git_sha": os.environ["PL_GIT_SHA"] or None,
+}
+
+lock_path.parent.mkdir(parents=True, exist_ok=True)
+with tempfile.NamedTemporaryFile(mode="w", dir=str(lock_path.parent),
+                                 delete=False, encoding="utf-8") as tmp:
+    json.dump(lock, tmp, indent=1, ensure_ascii=False, sort_keys=True)
+    tmp.write("\n")
+    tmp_path = tmp.name
+os.replace(tmp_path, str(lock_path))
+
+print(json.dumps({"ok": True, "reason": None, "hint": None,
+                  "data": {"sealed": len(norm)}}))
 '
     exit $?
     ;;

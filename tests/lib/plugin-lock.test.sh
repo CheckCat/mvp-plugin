@@ -148,8 +148,15 @@ run_check() { # <plugin-dir> <proj-dir>
 }
 
 # --- Test 2 (часть 1): всё чисто ------------------------------------------
+# record (Task 1/2) не трогает normative — это работа seal (Task 3). Фейковый
+# плагин уже содержит файлы под NORMATIVE_GLOBS (skills/*/SKILL.md, lib/*),
+# поэтому без seal здесь check всегда видел бы normative_added и "чистое"
+# состояние было бы недостижимо — этот seal не проверяет seal сам по себе
+# (это делает test 7), он лишь достраивает то, что реальный mvp:bootstrap
+# делает автоматически (спека §10), чтобы "чисто" вообще было возможно.
 
 read -r p2 j2 <<< "$(make_recorded_pair t2)"
+(cd "$j2" && PLUGIN_ROOT="$p2" bash "$LOCK_SH" seal >/dev/null 2>&1)
 c2="$(run_check "$p2" "$j2")"
 assert_eq "test 2a: ok при чистом плагине" "True" "$(jq_py "$c2" 'd["ok"]')"
 assert_eq "test 2a: lock_present" "True" "$(jq_py "$c2" 'd["data"]["lock_present"]')"
@@ -233,5 +240,75 @@ if grep -q "Traceback" "$err6_file"; then
   echo "FAIL: test 6: неотловленное исключение в stderr (нашли \"Traceback\"): $(cat "$err6_file")" >&2
   fail=1
 fi
+
+# --- Test 5: правка SKILL.md — только normative_changed ------------------
+
+read -r p5 j5 <<< "$(make_recorded_pair t5)"
+(cd "$j5" && PLUGIN_ROOT="$p5" bash "$LOCK_SH" seal >/dev/null 2>&1)
+c5a="$(run_check "$p5" "$j5")"
+assert_eq "test 5a: после seal чисто" "True" "$(jq_py "$c5a" 'd["ok"]')"
+
+printf 'SKILL retro v2 — новое требование\n' > "$p5/skills/build/SKILL.md"
+c5="$(run_check "$p5" "$j5")"
+assert_eq "test 5: ok:false" "False" "$(jq_py "$c5" 'd["ok"]')"
+assert_eq "test 5: ровно один changed" "1" "$(jq_py "$c5" 'len(d["data"]["normative_changed"])')"
+assert_eq "test 5: это build/SKILL.md" "skills/build/SKILL.md" \
+  "$(jq_py "$c5" 'd["data"]["normative_changed"][0]')"
+assert_eq "test 5: derived не тронут" "0" \
+  "$(jq_py "$c5" 'len(d["data"]["derived_stale"]) + len(d["data"]["derived_tampered"]) + len(d["data"]["derived_missing"])')"
+
+# --- Test 10: новый файл под глоб lib/* = normative_added ----------------
+
+printf 'echo new\n' > "$p5/lib/brand-new.sh"
+c10="$(run_check "$p5" "$j5")"
+assert_eq "test 10: ровно один added" "1" "$(jq_py "$c10" 'len(d["data"]["normative_added"])')"
+assert_eq "test 10: это brand-new.sh" "lib/brand-new.sh" \
+  "$(jq_py "$c10" 'd["data"]["normative_added"][0]')"
+
+# --- Test 10b: удалённый файл = normative_removed ------------------------
+
+rm "$p5/lib/validate-task.sh"
+c10b="$(run_check "$p5" "$j5")"
+assert_eq "test 10b: ровно один removed" "1" "$(jq_py "$c10b" 'len(d["data"]["normative_removed"])')"
+assert_eq "test 10b: это validate-task.sh" "lib/validate-task.sh" \
+  "$(jq_py "$c10b" 'd["data"]["normative_removed"][0]')"
+
+# --- Test 5b: глоб не захватывает agents/ и references/ ------------------
+
+read -r p5b j5b <<< "$(make_recorded_pair t5b)"
+mkdir -p "$p5b/skills/build/agents" "$p5b/skills/retro/references"
+printf 'reviewer v1\n' > "$p5b/skills/build/agents/reviewer.md"
+printf 'handbook v1\n' > "$p5b/skills/retro/references/retro-handbook.md"
+(cd "$j5b" && PLUGIN_ROOT="$p5b" bash "$LOCK_SH" seal >/dev/null 2>&1)
+printf 'reviewer v2\n' > "$p5b/skills/build/agents/reviewer.md"
+printf 'handbook v2\n' > "$p5b/skills/retro/references/retro-handbook.md"
+c5b="$(run_check "$p5b" "$j5b")"
+assert_eq "test 5b: agents/ и references/ вне наблюдения" "True" \
+  "$(jq_py "$c5b" 'd["ok"]')"
+
+# --- Test 7: seal гасит нормативку и не трогает derived ------------------
+# derived_before снят ДО первого вызова seal (сразу после record, который
+# normative не трогает — Task 1/2). Если бы снимок брался после seal, как
+# после первой попытки написать этот тест, "seal стирает derived" не
+# покраснел бы: оба снимка были бы одинаково испорчены (см. негативный
+# контроль №3 в task-3-report.md) — сравнение "испорчено == испорчено"
+# проходит, ничего не проверяя.
+
+read -r p7 j7 <<< "$(make_recorded_pair t7)"
+derived_before="$(jq_py "$(cat "$j7/.mvp/plugin-lock.json")" 'json.dumps(d["derived"], sort_keys=True)')"
+(cd "$j7" && PLUGIN_ROOT="$p7" bash "$LOCK_SH" seal >/dev/null 2>&1)
+
+printf 'SKILL bootstrap v2\n' > "$p7/skills/bootstrap/SKILL.md"
+c7a="$(run_check "$p7" "$j7")"
+assert_eq "test 7a: дрейф виден" "1" "$(jq_py "$c7a" 'len(d["data"]["normative_changed"])')"
+
+out7="$(cd "$j7" && PLUGIN_ROOT="$p7" bash "$LOCK_SH" seal 2>/dev/null)"
+assert_eq "test 7: seal ok" "True" "$(jq_py "$(last_line "$out7")" 'd["ok"]')"
+
+c7b="$(run_check "$p7" "$j7")"
+assert_eq "test 7b: после seal чисто" "True" "$(jq_py "$c7b" 'd["ok"]')"
+
+derived_after="$(jq_py "$(cat "$j7/.mvp/plugin-lock.json")" 'json.dumps(d["derived"], sort_keys=True)')"
+assert_eq "test 7c: derived не изменился" "$derived_before" "$derived_after"
 
 exit $fail
