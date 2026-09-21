@@ -480,6 +480,60 @@ ti = max(i for i, l in enumerate(lines) if l.startswith('Task 002: complete'))
 print(1 if ci < ti else 0)
 " "$dir/.mvp/ledger.md")"
 
+# --concern-b64: the same write, but in a form a RELAY AGENT cannot re-author.
+# Task 018 of the trellis run (2026-09-17): the relay was handed a quoted
+# multi-line concern block, re-wrote the command instead of repeating it, and
+# invented `--findings`. `complete` and `finalize.sh` had already run, so the
+# task was committed and only its audit trail was lost. The payload is now one
+# opaque ASCII token whose declared byte length must match what decodes.
+dir="$(new_repo)"
+concern_text="CONCERN 1: Windows в этом окружении нет — start.bat не исполнялся
+review finding refuted, not fixed: {\"severity\":\"bug\",\"file\":\"start.ps1\"}"
+payload="$(python3 -c "
+import base64, sys
+b = sys.argv[1].encode('utf-8')
+print(f'{len(b)}.{base64.b64encode(b).decode()}')
+" "$concern_text")"
+out="$(run_plan_io "$dir" ledger --task 001 --sha HEAD --concern-b64 "$payload")"
+assert_eq "N-16 ledger --concern-b64 ok" "True" "$(json_field "$out" 'd["ok"]')"
+assert_eq "N-17 utf-8 concern survives the encoding" "1" \
+  "$(grep -c 'concern (task 001): CONCERN 1: Windows в этом окружении нет — start.bat не исполнялся' "$dir/.mvp/ledger.md")"
+assert_eq "N-18 the json-bearing line survives too" "1" \
+  "$(grep -c 'concern (task 001): review finding refuted, not fixed: {"severity":"bug"' "$dir/.mvp/ledger.md")"
+
+# A relay that drops the tail of the blob must fail the command, not write a
+# quietly shortened concern — that is the whole point of the length prefix.
+dir="$(new_repo)"
+truncated="$(python3 -c "
+import base64
+b = 'the full concern text that the relay must not shorten'.encode('utf-8')
+print(f'{len(b)}.{base64.b64encode(b[:-5]).decode()}')
+")"
+out="$(run_plan_io "$dir" ledger --task 001 --sha HEAD --concern-b64 "$truncated")"
+assert_eq "N-19 truncated payload is refused" "False" "$(json_field "$out" 'd["ok"]')"
+assert_contains "N-20 refusal names the mismatch" "$out" "truncated in transit"
+assert_true "N-21 a refused payload writes no ledger at all" \
+  "$([ ! -f "$dir/.mvp/ledger.md" ] && echo true || echo false)"
+
+# Non-canonical base64 means something rewrote the blob: refuse it too.
+dir="$(new_repo)"
+out="$(run_plan_io "$dir" ledger --task 001 --sha HEAD --concern-b64 "5.not base64!")"
+assert_eq "N-22 non-base64 payload is refused" "False" "$(json_field "$out" 'd["ok"]')"
+out="$(run_plan_io "$dir" ledger --task 001 --sha HEAD --concern-b64 "no-dot-prefix")"
+assert_eq "N-23 payload without a length prefix is refused" "False" "$(json_field "$out" 'd["ok"]')"
+
+# Both flags at once is a caller bug; resolving it by precedence would hide it.
+dir="$(new_repo)"
+out="$(run_plan_io "$dir" ledger --task 001 --sha HEAD --concern "plain" --concern-b64 "4.dGV4dA==")"
+assert_eq "N-24 --concern and --concern-b64 together are refused" "False" "$(json_field "$out" 'd["ok"]')"
+
+# --concern itself still works: operators drive this script by hand during
+# recovery, and a hand-typed base64 blob would be a cruel thing to require.
+dir="$(new_repo)"
+run_plan_io "$dir" ledger --task 001 --sha HEAD --concern "hand-typed recovery note" >/dev/null
+assert_eq "N-25 --concern still supported for manual recovery" "1" \
+  "$(grep -c 'concern (task 001): hand-typed recovery note' "$dir/.mvp/ledger.md")"
+
 # ---------------------------------------------------------------------------
 # (O) add-task — a plan discovered mid-run must be able to grow.
 #     Until this verb existed the DAG froze the moment mvp:plan committed it.

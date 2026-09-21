@@ -1407,6 +1407,80 @@ function shQuote(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
 
+// utf8Bytes / base64Encode / b64Payload — hand-rolled because this sandbox is
+// PURE standard JS: no `Buffer`, no `TextEncoder`, no `btoa` (see the module
+// header's ambient-hook list). Node's Buffer is the oracle the tests check
+// these against, not something this file may call.
+//
+// b64Payload(s) -> "<byteLen>.<base64>", the wire form for free text that has
+// to survive a relay agent.
+//
+// Why (task 018 of the trellis run, 2026-09-17): shQuote makes text safe
+// against a SHELL, and that was the wrong threat model. The chain built below
+// is not handed to a shell this workflow controls — it is handed to a relay
+// SUBAGENT and asked to reproduce it verbatim. Given a multi-line concern
+// block with embedded JSON, the agent re-authored the command instead: it
+// closed the --concern quote early and invented `--findings`, a flag that
+// does not exist. plan-io rejected it, but `complete` and `finalize.sh` had
+// already run — the task was committed and only its audit trail was lost.
+//
+// Quoting cannot fix that: the more a payload looks like editable prose, the
+// more an LLM edits it. A single unbroken ASCII token with no quotes, no
+// newlines and no natural language offers nothing to improve. The length
+// prefix makes the remaining risk loud rather than silent — plan-io refuses a
+// blob whose decoded size does not match, so a truncated relay copy fails the
+// command instead of writing quietly mutilated text.
+function utf8Bytes(s) {
+  const out = [];
+  const str = String(s);
+  for (let i = 0; i < str.length; i++) {
+    let c = str.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < str.length) {
+      const low = str.charCodeAt(i + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        c = 0x10000 + ((c - 0xd800) << 10) + (low - 0xdc00);
+        i++;
+      }
+    }
+    // Lone surrogate: emit U+FFFD, exactly as Buffer.from(s,'utf8') does.
+    // Without this the encoder would produce WTF-8 that no decoder accepts.
+    if (c >= 0xd800 && c <= 0xdfff) c = 0xfffd;
+    if (c < 0x80) {
+      out.push(c);
+    } else if (c < 0x800) {
+      out.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f));
+    } else if (c < 0x10000) {
+      out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
+    } else {
+      out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 0x3f), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
+    }
+  }
+  return out;
+}
+
+function base64Encode(bytes) {
+  // Local, not module-level: tests/lib/workflow-parsers.mjs extracts whole
+  // `function NAME(...)` declarations out of this file and evaluates them in
+  // isolation, so a top-level const would be an undefined reference there.
+  const B64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i];
+    const b1 = i + 1 < bytes.length ? bytes[i + 1] : undefined;
+    const b2 = i + 2 < bytes.length ? bytes[i + 2] : undefined;
+    out += B64_ALPHABET[b0 >> 2];
+    out += B64_ALPHABET[((b0 & 0x03) << 4) | ((b1 === undefined ? 0 : b1) >> 4)];
+    out += b1 === undefined ? '=' : B64_ALPHABET[((b1 & 0x0f) << 2) | ((b2 === undefined ? 0 : b2) >> 6)];
+    out += b2 === undefined ? '=' : B64_ALPHABET[b2 & 0x3f];
+  }
+  return out;
+}
+
+function b64Payload(s) {
+  const bytes = utf8Bytes(s);
+  return `${bytes.length}.${base64Encode(bytes)}`;
+}
+
 // finalize: ONE relay for what used to be three dispatches plus an agent
 // (relay diet, 2026-08-24 — each dispatch costs a flat ~30 200 tokens of
 // subagent boot no matter how trivial the command):
@@ -1417,11 +1491,12 @@ function shQuote(s) {
 //   - `plan-io.mjs ledger` is chained after finalize.sh in the same shell
 //     command and resolves the new commit's sha itself (`--sha HEAD`), so
 //     the run no longer pays a dispatch to pass one string along.
-//   - concerns are persisted by that same call (`--concern`), by the script.
-//     They used to be the calling SKILL's job and were dropped on all 36
-//     vireo tasks; a state write that depends on the LLM remembering is not
-//     a state write. Sorting concerns through shQuote keeps arbitrary text
-//     out of the shell's hands.
+//   - concerns are persisted by that same call (`--concern-b64`), by the
+//     script. They used to be the calling SKILL's job and were dropped on all
+//     36 vireo tasks; a state write that depends on the LLM remembering is not
+//     a state write. They travel base64-encoded because the relay that runs
+//     this chain is an LLM, not a shell — see b64Payload above for the run
+//     where quoted prose was re-authored into a nonexistent flag.
 // The chain's LAST json line is now the ledger envelope, so the commit sha
 // is read from there (plan-io echoes it back for exactly this reason).
 async function finalize(id, boundary, tokensDelta, dispatches, concerns, phaseTitle) {
@@ -1433,7 +1508,7 @@ async function finalize(id, boundary, tokensDelta, dispatches, concerns, phaseTi
   // is committed exactly as the flat one was.
   const msgPath = `.mvp/commit-messages/commit-msg-${id}.txt`;
   const concernText = (concerns || []).filter(Boolean).join('\n');
-  const concernArg = concernText ? ` --concern ${shQuote(concernText)}` : '';
+  const concernArg = concernText ? ` --concern-b64 ${b64Payload(concernText)}` : '';
 
   // Staging scope is the task's BOUNDARY, not its declared file list (design
   // note 17b): the declared list is a hint, so anything the task legitimately

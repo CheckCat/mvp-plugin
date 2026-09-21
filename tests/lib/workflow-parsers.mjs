@@ -31,6 +31,7 @@ const WANTED = [
   'parseValidatorVerdict', 'parseReviewerVerdict', 'parseCannotVerify', 'parseReReview',
   'looksLikeEnvelope', 'coerceRelayFields',
   'declaredOnly', 'truncatedPaths', 'shQuote', 'isRepoRootBoundary',
+  'utf8Bytes', 'base64Encode', 'b64Payload',
   'severityRank', 'findingKey', 'unionFindings',
 ];
 
@@ -252,6 +253,52 @@ check('union: a PATCHES poll contributes no findings',
 check('union: junk inside FINDINGS is skipped, not crashed on',
   F.unionFindings([poll('verdict', 'request-changes', ['nonsense', null, 7, { severity: 'bug', file: 'a.py', line: 1 }])]).length, 1);
 checkTrue('union: a null poll does not throw', F.unionFindings([null, poll('verdict', 'approve', [])]).length === 0);
+
+// --- b64Payload: free text must survive a RELAY, not just a shell ----------
+//
+// shQuote protects text from the shell. It does not protect it from the LLM
+// that is asked to retype the command: on task 018 of the trellis run a relay
+// re-authored a quoted multi-line concern block and invented a `--findings`
+// flag, so plan-io rejected the call AFTER the task had already been
+// committed. b64Payload replaces prose with one opaque ASCII token.
+//
+// Node's Buffer is the oracle here; workflow.mjs may not call it (pure-JS
+// sandbox, see the module header), which is exactly why these hand-rolled
+// encoders need a test that compares against the real thing.
+const b64Cases = [
+  ['ascii', 'hello world'],
+  ['empty', ''],
+  ['single quote and dollar', `it's $HOME and \`id\``],
+  ['newlines', 'first line\nsecond line\n'],
+  ['cyrillic', 'Windows в этом окружении нет — start.bat не исполнялся'],
+  ['the real task-018 concern shape', 'CONCERN 1: текст\nreview finding refuted, not fixed: {"severity":"bug","file":"start.ps1","line":318,"quote":"if ($id.Length -eq 0) {"}'],
+  ['emoji (surrogate pair)', 'green ✅ and 🚀 done'],
+  ['every byte value as text', Array.from({ length: 256 }, (_, i) => String.fromCharCode(i)).join('')],
+];
+for (const [label, text] of b64Cases) {
+  const payload = F.b64Payload(text);
+  const dot = payload.indexOf('.');
+  const declared = Number(payload.slice(0, dot));
+  const b64 = payload.slice(dot + 1);
+  const decoded = Buffer.from(b64, 'base64');
+  check(`b64Payload round-trips: ${label}`, decoded.toString('utf8'), text);
+  check(`b64Payload length prefix is the byte count: ${label}`, declared, decoded.length);
+  check(`b64Payload matches Buffer's own base64: ${label}`,
+    b64, Buffer.from(text, 'utf8').toString('base64'));
+  checkTrue(`b64Payload is a single ASCII token with nothing to re-author: ${label}`,
+    /^[0-9]+\.[A-Za-z0-9+/]*={0,2}$/.test(payload));
+}
+
+// A lone surrogate must not produce WTF-8 no decoder accepts; Buffer answers
+// U+FFFD and so must we, or the payload would decode to something else.
+check('b64Payload: lone surrogate becomes U+FFFD, as Buffer does',
+  F.b64Payload('a\uD800b').split('.')[1], Buffer.from('a\uD800b', 'utf8').toString('base64'));
+
+check('utf8Bytes: multi-byte lengths match Buffer', F.utf8Bytes('é€🚀').length,
+  Buffer.from('é€🚀', 'utf8').length);
+check('base64Encode: padding for a 1-byte input', F.base64Encode([0x61]), Buffer.from([0x61]).toString('base64'));
+check('base64Encode: padding for a 2-byte input', F.base64Encode([0x61, 0x62]), Buffer.from([0x61, 0x62]).toString('base64'));
+check('base64Encode: no padding for a 3-byte input', F.base64Encode([0x61, 0x62, 0x63]), Buffer.from([0x61, 0x62, 0x63]).toString('base64'));
 
 if (failures) {
   console.error(`\n${failures} assertion(s) failed`);
