@@ -270,26 +270,170 @@ gate_build() {
     exit 1
   fi
 
+  # Roles the plan actually dispatches — extracted once, here, and reused by
+  # both the missing-agent-file check right below and the unstamped-role
+  # filter further down (§7 of the design doc). "Dispatched by the plan" has
+  # exactly one definition in this script; a second, slightly different way
+  # to re-derive it from plan.json would drift from this one silently.
+  local planned_roles
+  planned_roles="$(python3 - "$planfile" <<'PY' 2>/dev/null
+import json, sys
+try:
+    tasks = json.load(open(sys.argv[1], encoding="utf-8")).get("tasks", [])
+except Exception:
+    sys.exit(0)
+roles = sorted({t.get("role") for t in tasks if t.get("role")})
+print(",".join(roles))
+PY
+)"
+
   # Every role the plan dispatches must have an assembled agent file. This
   # catches a skipped/partial mvp:bootstrap; it CANNOT catch the other half of
   # the problem — agent types register when a Claude Code session starts, so
   # files written by a bootstrap in the current session exist here and still do
   # not dispatch. workflow.mjs raises that one as a per-task concern.
   local missing_roles
-  missing_roles="$(python3 - "$planfile" <<'PY' 2>/dev/null
-import json, os, sys
-try:
-    tasks = json.load(open(sys.argv[1], encoding="utf-8")).get("tasks", [])
-except Exception:
-    sys.exit(0)
-roles = sorted({t.get("role") for t in tasks if t.get("role")})
+  missing_roles="$(GB_ROLES="$planned_roles" python3 -c '
+import os
+roles = [r for r in os.environ.get("GB_ROLES", "").split(",") if r]
 print(",".join(r for r in roles if not os.path.isfile(f".claude/agents/{r}.md")))
-PY
-)"
+')"
   if [ -n "$missing_roles" ]; then
     emit_result false "no agent file for role(s): $missing_roles" \
       "rerun mvp:bootstrap step 4 (assemble-agent.sh) for each missing role" ""
     exit 1
+  fi
+
+  # --- plugin-lock: производное блокирует, нормативка только докладывается --
+  #
+  # Асимметрия намеренная (docs/specs/2026-09-21-plugin-lock-and-sync-design.md
+  # §7). derived блокирует, потому что цена известна: устаревшие агенты не
+  # регистрируются, задачи уходят на general-purpose без контракта _common.md,
+  # и ревью их одобряет — оно судит дифф, а не автора. Нормативка не
+  # блокирует, потому что иначе любой коммит в плагин останавливает все
+  # проекты сразу, и первое, чему научится оператор — обходить гейт.
+  #
+  # derived_unstamped — частный случай той же асимметрии, не расширение
+  # списка «жёстких» причин. check (§5.2) не может отличить подменённого
+  # плагинного агента от рукописного файла оператора — у находки нет поля
+  # role. Гейт может: он уже знает, какие роли диспатчит план (planned_roles
+  # выше). Подменённый плагинный агент опасен только если план вот-вот
+  # выдаст ему задачу — тогда роль есть в planned_roles, и это тот же риск,
+  # что derived_stale/tampered/missing. Файл, чью роль план не диспатчит, —
+  # не наша забота: запрещать оператору собственных агентов в .claude/agents/
+  # мы не вправе (см. §7 в спеке — halt только на роли, которые план реально
+  # диспатчит).
+  #
+  # `check` возвращает ok:false на ЛЮБОЕ расхождение — он диагност, а не
+  # политика. Политика здесь.
+  # Спека §7: "lock_present: false" валит build, только если в проекте уже
+  # есть хоть один собранный агент (.claude/agents/*.md) — иначе сравнивать
+  # не с чем (§5.2), и это не отличается от "плагин ещё не использовался".
+  local agents_present="false"
+  compgen -G ".claude/agents/*.md" >/dev/null 2>&1 && agents_present="true"
+
+  local lock_json
+  lock_json="$("$here/plugin-lock.sh" check 2>/dev/null | tail -n1)"
+  local lock_verdict
+  lock_verdict="$(GB_J="$lock_json" GB_AGENTS_PRESENT="$agents_present" GB_PLANNED_ROLES="$planned_roles" python3 -c '
+import json, os, sys
+raw = os.environ.get("GB_J") or ""
+try:
+    r = json.loads(raw)
+    if not isinstance(r, dict):
+        raise ValueError("plugin-lock.sh check payload is not a JSON object")
+except ValueError:
+    # Скрипт не отдал контракт (нет python3? снесли файл? отдал валидный
+    # JSON, но не объект — например [1,2,3] или null). Молча пропускать
+    # нельзя, но и валить build из-за сломанного диагноста — хуже: сам гейт
+    # тогда становится точкой отказа. Пропускаем, назвав причину.
+    print(json.dumps({"verdict": "skip", "reason": "plugin-lock.sh gave no JSON contract"}))
+    sys.exit(0)
+
+d = r.get("data") or {}
+if not isinstance(d, dict):
+    d = {}
+if d.get("lock_present") is False:
+    if os.environ.get("GB_AGENTS_PRESENT") == "true":
+        reason = ("plugin-lock.json exists but is not valid JSON — cannot tell if agents match the plugin"
+                   if d.get("lock_broken") is True else
+                   "no .mvp/plugin-lock.json — cannot tell if agents match the plugin")
+        print(json.dumps({"verdict": "halt", "reason": reason}))
+    else:
+        print(json.dumps({"verdict": "clean"}))
+    sys.exit(0)
+
+hard = []
+for key, label in (("derived_stale", "stale"), ("derived_tampered", "hand-edited"),
+                   ("derived_missing", "missing")):
+    for item in d.get(key) or []:
+        hard.append("%s(%s)" % (item.get("role"), label))
+
+# derived_unstamped items carry only "path" (check has no way to know a
+# role for them — §5.2). Derive the role from the filename and halt ONLY
+# for roles the plan dispatches; everything else is reported, not blocked
+# (see the policy comment above, in the shell code that calls this script).
+planned_roles = set(r for r in (os.environ.get("GB_PLANNED_ROLES") or "").split(",") if r)
+unstamped_foreign = []
+for item in d.get("derived_unstamped") or []:
+    path = item.get("path") or ""
+    role = os.path.splitext(os.path.basename(path))[0]
+    if role in planned_roles:
+        hard.append("%s(unstamped)" % role)
+    else:
+        unstamped_foreign.append(path)
+
+if hard:
+    print(json.dumps({"verdict": "halt",
+                      "reason": "agent file(s) out of sync with plugin: " + ", ".join(sorted(hard))}))
+    sys.exit(0)
+
+soft = {k: d.get(k) or [] for k in ("normative_changed", "normative_added", "normative_removed")}
+data_out = dict(soft)
+if unstamped_foreign:
+    data_out["derived_unstamped_foreign"] = sorted(unstamped_foreign)
+if any(soft.values()) or unstamped_foreign:
+    print(json.dumps({"verdict": "warn", "data": data_out}))
+    sys.exit(0)
+
+print(json.dumps({"verdict": "clean"}))
+')"
+
+  local lv
+  lv="$(GB_V="$lock_verdict" python3 -c '
+import json, os
+try:
+    d = json.loads(os.environ.get("GB_V") or "")
+except Exception:
+    d = None
+print(d["verdict"] if isinstance(d, dict) and "verdict" in d else "skip")
+')"
+  if [ "$lv" = "halt" ]; then
+    local lock_reason
+    lock_reason="$(GB_V="$lock_verdict" python3 -c 'import json,os; print(json.loads(os.environ["GB_V"])["reason"])')"
+    emit_result false "$lock_reason" "run mvp:sync" ""
+    exit 1
+  fi
+  if [ "$lv" = "warn" ]; then
+    local lock_data
+    lock_data="$(GB_V="$lock_verdict" python3 -c 'import json,os; print(json.dumps(json.loads(os.environ["GB_V"])["data"]))')"
+    emit_result true "" "" "$lock_data"
+    exit 0
+  fi
+  if [ "$lv" = "skip" ]; then
+    # Не блокируем build за сломанный диагност, но и не пропускаем молча:
+    # причина обязана быть видна оператору хоть где-то (stderr — единственное
+    # доступное место, stdout зарезервирован под JSON-контракт).
+    local skip_reason
+    skip_reason="$(GB_V="$lock_verdict" python3 -c '
+import json, os
+try:
+    d = json.loads(os.environ.get("GB_V") or "")
+except Exception:
+    d = None
+print(d.get("reason") if isinstance(d, dict) and d.get("reason") else "plugin-lock verdict unavailable")
+')"
+    echo "gate build: plugin-lock check skipped — $skip_reason" >&2
   fi
 
   emit_result true "" "" ""

@@ -62,6 +62,7 @@ mvp-plugin/
     validate-task.sh
     review-package.sh
     state.sh
+    plugin-lock.sh
   skills/
     brief/      SKILL.md, scripts/
     clarify/    SKILL.md, references/(queue-schema.md, refute-prompt.md), scripts/
@@ -70,7 +71,8 @@ mvp-plugin/
     build/      SKILL.md, workflow.mjs, agents/(implementer.md, validator.md, reviewer.md,
                 fix.md, re-review.md)
     resume/     SKILL.md
-    retro/      SKILL.md
+    retro/      SKILL.md, references/retro-handbook.md
+    sync/       SKILL.md, references/sync-handbook.md
   docs/
     specs/                          # этот документ и будущие
     observations/                   # переезд из ~/.claude/playbooks/observations/ + новые прогоны
@@ -84,7 +86,7 @@ mvp-plugin/
   .claude/state/plan.json exists and implementation should proceed».
 - SKILL.md ссылается на свои файлы относительными markdown-ссылками; `@`-ссылки запрещены.
 - Кросс-ссылки между скиллами — по имени: `**NEXT:** Use mvp:<next>`.
-- Размер: gate-скиллы (resume, retro) 2–4 КБ; оркестраторы (build, clarify) ≤ 13 КБ SKILL.md
+- Размер: gate-скиллы (resume, retro, sync) 2–4 КБ; оркестраторы (build, clarify) ≤ 13 КБ SKILL.md
   (поднято с 12 КБ 2026-09-15 под третий backend в bootstrap — fastify/docker-compose),
   тяжёлое — в references/ («Load when: ...») и scripts/ (не грузятся в контекст).
 - Каждый скилл начинается с «Announce at start: "Using mvp:<name> to <purpose>"».
@@ -94,12 +96,14 @@ mvp-plugin/
 | Скрипт | Контракт |
 |---|---|
 | `brief-contract.sh` | Единственный владелец: обязательные заголовки business_logic/technical_solutions, **allowlist стеков** (в v1 — 5 копий), layout-mapping (stack → service_path-схема). Функции source'ятся остальными скриптами. |
-| `gate.sh <stage>` | Детерминированные предусловия этапа: brief=«проект пуст?» (сигналы: .claude/state, CLAUDE.md, root-манифесты), clarify/bootstrap=«brief валиден?», plan=«bootstrap done? незакоммиченный plan.json?» (crash-recovery: предлагает дозавершить finalize вместо тупика), build=«plan закоммичен?». Выход: `{ok, reason, hint}`. |
-| `finalize.sh <scope> <prefix> <msg-file>` | Один механизм коммита на все этапы (в v1 — три). Explicit staging по списку файлов (никогда `-A`), verify subject-prefix **до** коммита, `git commit -F <msg> -- <files>`, JSON-ответ. Scope-пресеты: brief, clarify, bootstrap, plan, build-task. |
+| `gate.sh <stage>` | Детерминированные предусловия этапа: brief=«проект пуст?» (сигналы: .claude/state, CLAUDE.md, root-манифесты), clarify/bootstrap=«brief валиден?», plan=«bootstrap done? незакоммиченный plan.json?» (crash-recovery: предлагает дозавершить finalize вместо тупика), build=«plan закоммичен? на каждую роль плана есть `.claude/agents/<role>.md`? derived-агенты не разошлись с плагином (`plugin-lock.sh check`) — halt на `stale`/`tampered`/`missing` безусловно, на `unstamped` только если его роль диспатчит план (иначе — рукописный агент оператора, путь только в `data`), нормативный дрейф не блокирует, только в `data`». Выход: `{ok, reason, hint}`. |
+| `plugin-lock.sh <record\|check\|seal>` | Владелец `.mvp/plugin-lock.json` — отметки, от какого состояния плагина собраны `.claude/agents/*.md`. `record` — upsert одной роли (зовётся из `assemble-agent.sh`), `check` — чистая диагностика (не пишет), `seal` — печатает нормативку текущими хэшами плагина. См. `docs/specs/2026-09-21-plugin-lock-and-sync-design.md`. |
+| `finalize.sh <scope> <msg-file>` | Один механизм коммита на все этапы (в v1 — три). Explicit staging по списку файлов (никогда `-A`), verify subject-prefix **до** коммита, `git commit -F <msg> -- <files>`, JSON-ответ. Scope-пресеты: brief, clarify, bootstrap, plan, sync, build-task. |
 | `plan-io.mjs <cmd>` | Весь I/O plan.json. Команды: `validate` (схема + boundary + инварианты — бывший псевдокод plan-mvp Шага 3, включая crypto/frontend-test-проверки по полям задач, не по эвристикам названий), `next` (см. §6.2), `complete <id> --tokens <delta>`, `set-status <id> <status>`, `summary` (для гейта план→build). |
 | `apply-patches.py` | Как в v1 (uniqueness-check, атомарность) + re-stage ВСЕХ патченых файлов (в v1 — только «чистых») + patches.json пишется вызывающим агентом через Write tool (не haiku-heredoc). |
 | `validate-task.sh <task-id>` | Детерминированная часть валидации: lint/build/test командами из CI-зеркала проекта (генерирует bootstrap → invariants.md), boundary-check `git diff` против service_path, сверка заявленных файлов с фактическими. Выход: структурированный список нарушений или ok. |
 | `review-package.sh <base> <head>` | Дифф+стат+список коммитов в один файл, печатает путь (по образцу SDD). |
+| `save-review.sh <task-id> <label> (<raw-reply>\|--b64 <byteLen>.<base64>)` | Дописывает сырой ответ ревьюера в `.mvp/review/task-<id>.verdicts.md` (по секции на опрос), plain markdown, не JSONL — прозу читает человек. `--b64` — путь для relay-агента, которого просят перепечатать команду дословно: длина+base64 превращает обрыв в передаче в отказ, а не в тихо усечённый файл. Коммитится вместе с задачей через `finalize.sh`. |
 | `state.sh` | Чтение/запись `state.json` (фаза, курсор, clarify-маркер c `pending_critical` и `auto_closed_critical`). Убирает HTML-маркеры в markdown и grep по прозе. |
 
 ## 6. Этапы пайплайна

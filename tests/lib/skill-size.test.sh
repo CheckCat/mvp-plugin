@@ -40,7 +40,7 @@ check_size() { # <path> <max> <label>
   fi
 }
 
-for name in resume retro; do
+for name in resume retro sync; do
   check_size "$repo_root/skills/$name/SKILL.md" "$GATE_MAX" "gate skill $name"
 done
 

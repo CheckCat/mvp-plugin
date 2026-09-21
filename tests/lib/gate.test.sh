@@ -287,4 +287,246 @@ if ! echo "$G_OUT" | grep -qi "git"; then
   fail=1
 fi
 
+# --- plugin-lock: derived-дрейф валит gate build ------------------------
+# Асимметрия намеренная (спека §7): устаревшие агенты не регистрируются,
+# задачи уходят на general-purpose без контракта, и ревью это пропускает —
+# оно судит дифф, а не автора. Нормативка так не вредит и не блокирует.
+
+gl_proj="$tmproot/gate-lock-proj"
+gl_plugin="$tmproot/gate-lock-plugin"
+mkdir -p "$gl_plugin/skills/bootstrap/templates" "$gl_plugin/skills/build" \
+         "$gl_plugin/lib" "$gl_plugin/.claude-plugin"
+printf '%s\n' '{"name":"mvp","version":"9.9.9"}' > "$gl_plugin/.claude-plugin/plugin.json"
+printf 'COMMON v1\n' > "$gl_plugin/skills/bootstrap/templates/_common.md"
+printf -- '---\nname: devops-engineer\ndescription: d\ntools: Read\n---\n\nB\n' \
+  > "$gl_plugin/skills/bootstrap/templates/devops-engineer.docker-compose.fastify.template.md"
+printf 'SKILL build v1\n' > "$gl_plugin/skills/build/SKILL.md"
+printf 'echo hi\n' > "$gl_plugin/lib/validate-task.sh"
+
+# Проект, доведённый до состояния, в котором gate build проходит ВСЕ
+# предыдущие проверки: git-репо, закоммиченный plan.json, phase=plan-done,
+# агент на каждую роль плана.
+mkdir -p "$gl_proj/.claude/agents" "$gl_proj/.mvp"
+(cd "$gl_proj" && git init -q . && git config user.email t@t && git config user.name t)
+printf 'ASSEMBLED devops\n' > "$gl_proj/.claude/agents/devops-engineer.md"
+printf '%s\n' '{"tasks":[{"id":"001","role":"devops-engineer"}]}' > "$gl_proj/.mvp/plan.json"
+printf '%s\n' '{"phase":"plan-done"}' > "$gl_proj/.mvp/state.json"
+(cd "$gl_proj" && git add .mvp .claude && git commit -qm init)
+(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/plugin-lock.sh" \
+   record devops-engineer docker-compose.fastify >/dev/null 2>&1)
+(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/plugin-lock.sh" \
+   seal >/dev/null 2>&1)
+(cd "$gl_proj" && git add .mvp && git commit -qm lock)
+
+g_clean="$(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: чистый проект проходит" "True" "$(json_field "$g_clean" 'd["ok"]')"
+
+# derived-дрейф: правим _common.md в плагине
+printf 'COMMON v2\n' > "$gl_plugin/skills/bootstrap/templates/_common.md"
+g_stale="$(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: derived-дрейф валит" "False" "$(json_field "$g_stale" 'd["ok"]')"
+assert_eq "gate-lock: hint зовёт в mvp:sync" "run mvp:sync" "$(json_field "$g_stale" 'd["hint"]')"
+# ok:false в gate_build бывает по многим причинам (нет git, план не
+# закоммичен, нет агента под роль...) — hint уже различает их (см. выше), но
+# reason проверяем отдельной подстрокой, чтобы не спутать именно ЭТОТ halt
+# с любым другим источником ok:false.
+if ! echo "$g_stale" | grep -q "out of sync with plugin"; then
+  echo "FAIL: gate-lock: derived-дрейф reason не про рассинхрон с плагином: $g_stale" >&2
+  fail=1
+fi
+
+# Вернуть плагин к исходным байтам _common.md (derived снова чист — восстановление
+# байтов, не пересборка/re-record), испортить только нормативку
+printf 'COMMON v1\n' > "$gl_plugin/skills/bootstrap/templates/_common.md"
+printf 'SKILL build v2 — новое требование\n' > "$gl_plugin/skills/build/SKILL.md"
+g_norm="$(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: нормативка НЕ валит" "True" "$(json_field "$g_norm" 'd["ok"]')"
+assert_eq "gate-lock: нормативка попала в data" "skills/build/SKILL.md" \
+  "$(json_field "$g_norm" 'd["data"]["normative_changed"][0]')"
+
+# --- plugin-lock: halt срабатывает на КАЖДЫЙ hard-класс, не только stale ---
+# Правка 6а: мутация "оставить в halt-кортеже только stale" не красит эти
+# три случая — tampered/missing/unstamped независимые ветки policy в
+# gate_build (lib/gate.sh), и каждая нуждается в своём негативном контроле.
+
+# tampered: агент руками поправлен, sources в lock не менялись.
+printf 'ASSEMBLED devops — HAND EDITED\n' > "$gl_proj/.claude/agents/devops-engineer.md"
+g_tampered="$(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: tampered валит" "False" "$(json_field "$g_tampered" 'd["ok"]')"
+if ! echo "$g_tampered" | grep -q "hand-edited"; then
+  echo "FAIL: gate-lock: tampered reason не про hand-edited: $g_tampered" >&2
+  fail=1
+fi
+# восстановить байты — содержимое совпадает с тем, что было в момент record
+# (строка 311 ниже по файлу), новый output_sha256 не нужен.
+printf 'ASSEMBLED devops\n' > "$gl_proj/.claude/agents/devops-engineer.md"
+
+# missing: роль ЕСТЬ в lock, но НЕ входит в plan.json tasks — иначе более
+# ранняя проверка gate_build ("no agent file for role(s)") перехватила бы
+# её первой, так и не добравшись до плагин-лока (plan.json здесь ссылается
+# только на devops-engineer).
+printf -- '---\nname: integration-specialist\ndescription: d\ntools: Read\n---\n\nBODY integ v1\n' \
+  > "$gl_plugin/skills/bootstrap/templates/integration-specialist.template.md"
+printf 'ASSEMBLED integ\n' > "$gl_proj/.claude/agents/integration-specialist.md"
+(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/plugin-lock.sh" \
+   record integration-specialist >/dev/null 2>&1)
+rm "$gl_proj/.claude/agents/integration-specialist.md"
+g_missing="$(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: missing валит" "False" "$(json_field "$g_missing" 'd["ok"]')"
+if ! echo "$g_missing" | grep -q "missing"; then
+  echo "FAIL: gate-lock: missing reason не про missing: $g_missing" >&2
+  fail=1
+fi
+# Закрыть missing ДО следующего случая: байты совпадают с тем, что было в
+# момент record строкой выше, новый output_sha256 не нужен. Остаток 3а:
+# предыдущая версия этого файла не восстанавливала файл здесь, и следующий
+# ("unstamped") ассерт ok:false проходил по чужой причине — missing,
+# оставшийся открытым от этого случая, а не по своей.
+printf 'ASSEMBLED integ\n' > "$gl_proj/.claude/agents/integration-specialist.md"
+
+# --- plugin-lock: derived_unstamped халтит ТОЛЬКО если роль реально
+# диспатчится планом (Остаток 1, спека §7/§5.2) -------------------------
+# check не умеет отличить подменённого плагинного агента от рукописного
+# файла оператора — у unstamped-находки нет поля role. Различает гейт, по
+# planned_roles (то же извлечение ролей из plan.json, что и у missing_roles
+# чуть выше в lib/gate.sh). Опасен только тот случай, когда план вот-вот
+# выдаст задачу под эту роль; посторонний файл — не наша забота, но и не
+# тишина: путь обязан быть виден оператору в data (симметрично normative).
+#
+# Две ИЗОЛИРОВАННЫЕ фикстуры, не мутации gl_proj: сценарии взаимоисключающие
+# (один обязан валить, другой обязан проходить), и после известной находки
+# в Остатке 3а история мутаций gl_proj и так длинная — плодить в ней ещё
+# одну пару "добавили/убрали" означало бы новый шанс на тот же дефект.
+
+# (a) роль unstamped-файла ЕСТЬ в plan.json -> halt.
+gl_unstamp_inplan="$tmproot/gate-unstamped-inplan"
+mkdir -p "$gl_unstamp_inplan/.claude/agents" "$gl_unstamp_inplan/.mvp"
+(cd "$gl_unstamp_inplan" && git init -q . && git config user.email t@t && git config user.name t)
+printf '%s\n' '{"tasks":[{"id":"001","role":"test-writer"}]}' > "$gl_unstamp_inplan/.mvp/plan.json"
+printf '%s\n' '{"phase":"plan-done"}' > "$gl_unstamp_inplan/.mvp/state.json"
+# Файл существует (не запись через record) — ровно то, что делает находку
+# unstamped, а не missing/stale/tampered.
+printf 'HAND-PLACED test-writer\n' > "$gl_unstamp_inplan/.claude/agents/test-writer.md"
+(cd "$gl_unstamp_inplan" && git add .mvp .claude && git commit -qm init)
+# lock должен существовать (иначе halt приходит по "no .mvp/plugin-lock.json",
+# а не по unstamped) — seal его создаёт с derived:{} и нормативкой текущего
+# плагина; derived-запись для test-writer в нём нет ни одной.
+(cd "$gl_unstamp_inplan" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/plugin-lock.sh" seal >/dev/null 2>&1)
+g_unstamp_inplan="$(cd "$gl_unstamp_inplan" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: unstamped, роль в плане — валит" "False" "$(json_field "$g_unstamp_inplan" 'd["ok"]')"
+# "unstamped)" (со скобкой, формат "<роль>(unstamped)" из reason) — не просто
+# "unstamped": та подстрока входит и в ключ data.derived_unstamped_foreign,
+# которым гейт на ПРОТИВОПОЛОЖНОМ (безобидном, ok:true) исходе докладывает
+# посторонний unstamped-файл. Без скобки страж декоративен: сломай gate.sh
+# так, чтобы он никогда не халтил на unstamped, — этот случай провалится в
+# warn-ветку, ok станет True, но "unstamped" всё равно останется в выводе
+# через тот самый ключ, и голый grep -q "unstamped" молча смолчит.
+if ! echo "$g_unstamp_inplan" | grep -q "unstamped)"; then
+  echo "FAIL: gate-lock: unstamped(в плане) reason не про unstamped: $g_unstamp_inplan" >&2
+  fail=1
+fi
+
+# (b) роль unstamped-файла НЕ входит в plan.json -> проходит, путь виден в data.
+# ("my-custom-helper" — тот самый рукописный агент оператора из Остатка 1:
+# ни одна роль плана не называется так же.)
+gl_unstamp_foreign="$tmproot/gate-unstamped-foreign"
+mkdir -p "$gl_unstamp_foreign/.claude/agents" "$gl_unstamp_foreign/.mvp"
+(cd "$gl_unstamp_foreign" && git init -q . && git config user.email t@t && git config user.name t)
+printf '%s\n' '{"tasks":[{"id":"001","role":"devops-engineer"}]}' > "$gl_unstamp_foreign/.mvp/plan.json"
+printf '%s\n' '{"phase":"plan-done"}' > "$gl_unstamp_foreign/.mvp/state.json"
+printf 'ASSEMBLED devops\n' > "$gl_unstamp_foreign/.claude/agents/devops-engineer.md"
+(cd "$gl_unstamp_foreign" && git add .mvp .claude && git commit -qm init)
+# devops-engineer — единственная роль плана — ЗАПИСАНА и запечатана, иначе
+# она сама оказалась бы unstamped(в плане) и замаскировала бы то, что
+# проверяет этот случай.
+(cd "$gl_unstamp_foreign" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/plugin-lock.sh" \
+   record devops-engineer docker-compose.fastify >/dev/null 2>&1)
+(cd "$gl_unstamp_foreign" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/plugin-lock.sh" seal >/dev/null 2>&1)
+printf 'MY CUSTOM HELPER\n' > "$gl_unstamp_foreign/.claude/agents/my-custom-helper.md"
+g_unstamp_foreign="$(cd "$gl_unstamp_foreign" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: unstamped, роли нет в плане — не валит" "True" "$(json_field "$g_unstamp_foreign" 'd["ok"]')"
+assert_eq "gate-lock: посторонний путь виден в data" ".claude/agents/my-custom-helper.md" \
+  "$(json_field "$g_unstamp_foreign" 'd["data"]["derived_unstamped_foreign"][0]')"
+
+# Отсутствие lock при наличии агентов — валит
+rm "$gl_proj/.mvp/plugin-lock.json"
+g_nolock="$(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: нет lock при наличии агентов — валит" "False" "$(json_field "$g_nolock" 'd["ok"]')"
+if ! echo "$g_nolock" | grep -q "no .mvp/plugin-lock.json"; then
+  echo "FAIL: gate-lock: нет-lock reason не про отсутствие lock-файла: $g_nolock" >&2
+  fail=1
+fi
+
+# Битый lock (Остаток 2): файл ЕСТЬ, но не парсится как JSON — reason гейта
+# обязан называть именно это, а не переиспользовать текст "файла нет вовсе".
+# lib/gate.sh уже различает lock_present:false/lock_broken:true (полученные
+# от plugin-lock.sh check) — здесь фиксируем это поведение тестом: раньше
+# откат к безусловному "no .mvp/plugin-lock.json" не красил ни один тест.
+printf '{not valid json' > "$gl_proj/.mvp/plugin-lock.json"
+g_brokenlock="$(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: битый lock — валит" "False" "$(json_field "$g_brokenlock" 'd["ok"]')"
+assert_eq "gate-lock: битый lock reason называет битый файл" \
+  "plugin-lock.json exists but is not valid JSON — cannot tell if agents match the plugin" \
+  "$(json_field "$g_brokenlock" 'd["reason"]')"
+if echo "$g_brokenlock" | grep -q "no .mvp/plugin-lock.json"; then
+  echo "FAIL: gate-lock: битый lock reason говорит про отсутствующий файл (тот же текст, что и для нет-lock): $g_brokenlock" >&2
+  fail=1
+fi
+rm "$gl_proj/.mvp/plugin-lock.json"
+
+# Обратный контроль: отсутствие lock БЕЗ единого собранного агента — не
+# валит (спека §7: "сравнить не с чем" — это не дрейф). Отдельный свежий
+# проект, чтобы не зависеть от мутаций gl_proj выше по файлу.
+gl_proj_noagents="$tmproot/gate-lock-proj-noagents"
+mkdir -p "$gl_proj_noagents/.mvp"
+(cd "$gl_proj_noagents" && git init -q . && git config user.email t@t && git config user.name t)
+printf '%s\n' '{"tasks":[]}' > "$gl_proj_noagents/.mvp/plan.json"
+printf '%s\n' '{"phase":"plan-done"}' > "$gl_proj_noagents/.mvp/state.json"
+(cd "$gl_proj_noagents" && git add .mvp && git commit -qm init)
+g_noagents="$(cd "$gl_proj_noagents" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: нет lock и нет агентов — НЕ валит" "True" "$(json_field "$g_noagents" 'd["ok"]')"
+
+# --- plugin-lock: skip-ветка (plugin-lock.sh не отдал разбираемый JSON) --
+# Требование: гейт не должен сам стать точкой отказа (build остаётся
+# ok:true), но и не имеет права молча проглотить проблему — причина обязана
+# уйти хоть куда-то (stderr, раз stdout занят JSON-контрактом). Проверяем
+# обеими сторонами: ok:true И непустой релевантный stderr — по отдельности
+# каждая половина могла бы пройти при сломанной другой.
+gl_lib_broken="$tmproot/gate-lock-broken-lib"
+cp -r "$repo_root/lib" "$gl_lib_broken"
+printf '#!/usr/bin/env bash\necho "not valid json"\n' > "$gl_lib_broken/plugin-lock.sh"
+chmod +x "$gl_lib_broken/plugin-lock.sh"
+
+gl_skip_err="$tmproot/gate-lock-skip-stderr.txt"
+g_skip="$(cd "$gl_proj" && "$gl_lib_broken/gate.sh" build 2>"$gl_skip_err" | tail -n1)"
+assert_eq "gate-lock: skip-ветка не валит build" "True" "$(json_field "$g_skip" 'd["ok"]')"
+if ! grep -q "plugin-lock" "$gl_skip_err"; then
+  echo "FAIL: gate-lock: skip-ветка молчит на stderr: $(cat "$gl_skip_err")" >&2
+  fail=1
+fi
+
+# --- plugin-lock: skip-ветка на валидном JSON, который НЕ объект -----------
+# Правка 5а: `d.get(...)` в вердикт-блоке раньше не проверял тип r/d перед
+# .get() — валидный JSON вида "[1,2,3]" или "null" не кидает json.loads,
+# кидает AttributeError на r.get(...) ПОСЛЕ него. Без type-guard вердикт-
+# скрипт падает молча, $lv остаётся пустым, ни одна ветка (halt/warn/skip)
+# не срабатывает, и до правки build печатал ok:true с data:null БЕЗ
+# диагностики на stderr — молча промахиваясь в небезопасную сторону.
+# Проверяем обеими сторонами, как и в тесте выше: ok:true И непустой stderr.
+for payload in '[1,2,3]' 'null'; do
+  gl_lib_nonobj="$tmproot/gate-lock-nonobj-$(printf '%s' "$payload" | tr -dc 'a-z0-9')"
+  cp -r "$repo_root/lib" "$gl_lib_nonobj"
+  printf '#!/usr/bin/env bash\necho '"'"'%s'"'"'\n' "$payload" > "$gl_lib_nonobj/plugin-lock.sh"
+  chmod +x "$gl_lib_nonobj/plugin-lock.sh"
+
+  gl_nonobj_err="$tmproot/gate-lock-nonobj-stderr-$(printf '%s' "$payload" | tr -dc 'a-z0-9').txt"
+  g_nonobj="$(cd "$gl_proj" && "$gl_lib_nonobj/gate.sh" build 2>"$gl_nonobj_err" | tail -n1)"
+  assert_eq "gate-lock: non-object payload ($payload) не валит build" "True" \
+    "$(json_field "$g_nonobj" 'd["ok"]')"
+  if ! grep -q "plugin-lock" "$gl_nonobj_err"; then
+    echo "FAIL: gate-lock: non-object payload ($payload) молчит на stderr: $(cat "$gl_nonobj_err")" >&2
+    fail=1
+  fi
+done
+
 exit $fail

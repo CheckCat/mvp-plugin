@@ -299,4 +299,43 @@ write_msg "$d_plan/msg.txt" "chore: plan scope"
 run_finalize "$d_plan" plan msg.txt
 assert_eq "(preset plan) exit code" "0" "$F_EXIT"
 
+# --- scope sync стейджит ровно .claude/agents и .mvp/plugin-lock.json,
+#     остальные грязные файлы (в т.ч. другие файлы внутри .mvp) остаются
+#     нетронутыми ---------------------------------------------------------
+# Не переиспользуем пресет bootstrap: тот тянет CLAUDE.md, docs/architecture.md
+# и весь .mvp и затащил бы в sync-коммит несвязанные грязные файлы.
+
+d_sync="$(new_git_repo)"
+mkdir -p "$d_sync/.claude/agents" "$d_sync/.mvp" "$d_sync/docs"
+printf 'v1\n' >"$d_sync/.claude/agents/devops-engineer.md"
+printf '{}\n' >"$d_sync/.mvp/plugin-lock.json"
+printf 'v1\n' >"$d_sync/CLAUDE.md"
+printf 'v1\n' >"$d_sync/docs/architecture.md"
+printf 'v1\n' >"$d_sync/.mvp/ledger.md"
+(cd "$d_sync" && git add . && git commit -qm init)
+
+# Грязним всё: и то, что sync обязан взять, и то, что обязан оставить.
+printf 'v2\n' >"$d_sync/.claude/agents/devops-engineer.md"
+printf '{"x":1}\n' >"$d_sync/.mvp/plugin-lock.json"
+printf 'v2\n' >"$d_sync/CLAUDE.md"
+printf 'v2\n' >"$d_sync/.mvp/ledger.md"
+
+write_msg "$d_sync/msg.txt" "chore: sync plugin artifacts"
+run_finalize "$d_sync" sync msg.txt
+
+assert_eq "(sync) exit code" "0" "$F_EXIT"
+assert_eq "(sync) ok:true" "True" "$(json_field "$F_OUT" 'd["ok"]')"
+
+# Sort order for '.'-prefixed vs plain names is locale-sensitive; force
+# LC_ALL=C for a deterministic comparison in both checks below.
+COMMITTED_SYNC="$(cd "$d_sync" && git show --name-only --pretty=format: HEAD | sed '/^$/d' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "(sync) ровно два пути в коммите" \
+  ".claude/agents/devops-engineer.md .mvp/plugin-lock.json" "$COMMITTED_SYNC"
+
+# msg.txt is the synthetic commit-message file this test itself writes into
+# the fixture (not a project artifact) — excluded, since it's noise re:
+# what the sync preset should or shouldn't touch.
+DIRTY_SYNC="$(cd "$d_sync" && git status --porcelain | awk '{print $2}' | grep -vxF 'msg.txt' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "(sync) остальное осталось грязным" ".mvp/ledger.md CLAUDE.md" "$DIRTY_SYNC"
+
 exit $fail
