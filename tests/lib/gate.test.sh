@@ -335,7 +335,8 @@ if ! echo "$g_stale" | grep -q "out of sync with plugin"; then
   fail=1
 fi
 
-# Вернуть плагин, пересобрать отметку, испортить только нормативку
+# Вернуть плагин к исходным байтам _common.md (derived снова чист — восстановление
+# байтов, не пересборка/re-record), испортить только нормативку
 printf 'COMMON v1\n' > "$gl_plugin/skills/bootstrap/templates/_common.md"
 printf 'SKILL build v2 — новое требование\n' > "$gl_plugin/skills/build/SKILL.md"
 g_norm="$(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"

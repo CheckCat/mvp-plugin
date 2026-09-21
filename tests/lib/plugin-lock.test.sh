@@ -268,7 +268,7 @@ read -r p5 j5 <<< "$(make_recorded_pair t5)"
 c5a="$(run_check "$p5" "$j5")"
 assert_eq "test 5a: после seal чисто" "True" "$(jq_py "$c5a" 'd["ok"]')"
 
-printf 'SKILL retro v2 — новое требование\n' > "$p5/skills/build/SKILL.md"
+printf 'SKILL build v2 — новое требование\n' > "$p5/skills/build/SKILL.md"
 c5="$(run_check "$p5" "$j5")"
 assert_eq "test 5: ok:false" "False" "$(jq_py "$c5" 'd["ok"]')"
 assert_eq "test 5: ровно один changed" "1" "$(jq_py "$c5" 'len(d["data"]["normative_changed"])')"
