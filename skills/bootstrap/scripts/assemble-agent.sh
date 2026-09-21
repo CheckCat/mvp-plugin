@@ -144,6 +144,26 @@ fi
 mv "$TMP" "$OUT"
 trap - EXIT
 
+# Отметка в .mvp/plugin-lock.json — часть сборки, а не отдельный шаг.
+# Производитель штампует свой результат: только здесь одновременно известны
+# роль, выбранный шаблон, значения плейсхолдеров и путь результата. Шаг,
+# который можно забыть, забывается — см. docs/specs/2026-09-21-plugin-lock-
+# and-sync-design.md §6.
+LOCK_OUT="$(PROJECT="$PROJECT" SERVICE_API="$SERVICE_API" \
+  SERVICE_WORKER="$SERVICE_WORKER" OUT_DIR="$OUT_DIR" \
+  bash "$here/../../../lib/plugin-lock.sh" record "$ROLE" "$STACK" 2>&1 | tail -n1)"
+LOCK_OK="$(PL_L="$LOCK_OUT" python3 -c '
+import json, os
+try:
+    print("true" if json.loads(os.environ["PL_L"]).get("ok") else "false")
+except Exception:
+    print("false")
+')"
+if [ "$LOCK_OK" != "true" ]; then
+  fail "plugin-lock record failed after assembling $OUT" \
+    "see: $LOCK_OUT — the agent file IS written; rerunning assemble-agent.sh is idempotent"
+fi
+
 DATA="$(python3 -c 'import json,sys; print(json.dumps({"out": sys.argv[1], "template": sys.argv[2]}))' "$OUT" "$(basename "$TEMPLATE")")"
 emit_result true "" "" "$DATA"
 exit 0

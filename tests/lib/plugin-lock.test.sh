@@ -311,4 +311,32 @@ assert_eq "test 7b: после seal чисто" "True" "$(jq_py "$c7b" 'd["ok"]'
 derived_after="$(jq_py "$(cat "$j7/.mvp/plugin-lock.json")" 'json.dumps(d["derived"], sort_keys=True)')"
 assert_eq "test 7c: derived не изменился" "$derived_before" "$derived_after"
 
+# --- Test 11: assemble-agent.sh сам записывает lock ----------------------
+# Производитель штампует свой результат: он единственный знает роль,
+# выбранный шаблон, значения плейсхолдеров и путь результата сразу.
+
+ASSEMBLE_SH="$repo_root/skills/bootstrap/scripts/assemble-agent.sh"
+p11="$tmpdir/t11-plugin"; j11="$tmpdir/t11-proj"
+make_fake_plugin "$p11"; make_fake_project "$j11"
+
+out11="$(cd "$j11" && PLUGIN_ROOT="$p11" \
+  TEMPLATES_DIR="$p11/skills/bootstrap/templates" \
+  bash "$ASSEMBLE_SH" devops-engineer docker-compose.fastify 2>/dev/null)"
+rc11=$?
+assert_eq "test 11: assemble exit" "0" "$rc11"
+assert_eq "test 11: assemble ok" "True" "$(jq_py "$(last_line "$out11")" 'd["ok"]')"
+
+if [ -f "$j11/.mvp/plugin-lock.json" ]; then
+  lock11="$(cat "$j11/.mvp/plugin-lock.json")"
+  assert_eq "test 11: запись появилась" "docker-compose.fastify" \
+    "$(jq_py "$lock11" 'd["derived"][".claude/agents/devops-engineer.md"]["stack"]')"
+  # И сразу проверяем главное: свежесобранный агент не считается дрейфующим.
+  c11="$(run_check "$p11" "$j11")"
+  assert_eq "test 11: свежая сборка чиста по derived" "0" \
+    "$(jq_py "$c11" 'len(d["data"]["derived_stale"]) + len(d["data"]["derived_tampered"])')"
+else
+  echo "FAIL: test 11 — assemble-agent.sh не создал .mvp/plugin-lock.json" >&2
+  fail=1
+fi
+
 exit $fail
