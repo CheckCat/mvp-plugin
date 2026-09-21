@@ -366,10 +366,20 @@ fi
 # только один.
 
 read -r p12 j12 <<< "$(make_recorded_pair t12-stamped)"
+# seal ДО проверок: make_recorded_pair только record'ит роли и normative не
+# трогает (Task 1/2), а фейковый плагин уже содержит файлы под
+# NORMATIVE_GLOBS — без seal здесь normative_added был бы непустым и делал
+# бы ok:false САМ ПО СЕБЕ, ещё до удаления записи ниже. Тогда test 12 "ok:false"
+# проходил бы по нормативному дрейфу, а не по unstamped, который он якобы
+# проверяет (найдено при проверке соседних случаев на незакрытое состояние).
+(cd "$j12" && PLUGIN_ROOT="$p12" bash "$LOCK_SH" seal >/dev/null 2>&1)
 # make_recorded_pair уже записал ОБЕ роли — сперва проверяем обратный
-# контроль (записаны обе → unstamped пуст), потом стираем запись одной из
-# них из lock, оставляя сам файл на месте, и проверяем прямой случай.
+# контроль (записаны обе, normative запечатана → ok:true, unstamped пуст),
+# потом стираем запись одной из них из lock, оставляя сам файл на месте, и
+# проверяем прямой случай.
 c12_both="$(run_check "$p12" "$j12")"
+assert_eq "test 12: обе роли записаны + seal -> ok:true (иначе следующий ok:false ловил бы normative, не unstamped)" \
+  "True" "$(jq_py "$c12_both" 'd["ok"]')"
 assert_eq "test 12: обе роли записаны -> unstamped пуст" "0" \
   "$(jq_py "$c12_both" 'len(d["data"]["derived_unstamped"])')"
 

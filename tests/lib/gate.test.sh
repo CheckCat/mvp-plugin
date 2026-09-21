@@ -450,6 +450,23 @@ if ! echo "$g_nolock" | grep -q "no .mvp/plugin-lock.json"; then
   fail=1
 fi
 
+# Битый lock (Остаток 2): файл ЕСТЬ, но не парсится как JSON — reason гейта
+# обязан называть именно это, а не переиспользовать текст "файла нет вовсе".
+# lib/gate.sh уже различает lock_present:false/lock_broken:true (полученные
+# от plugin-lock.sh check) — здесь фиксируем это поведение тестом: раньше
+# откат к безусловному "no .mvp/plugin-lock.json" не красил ни один тест.
+printf '{not valid json' > "$gl_proj/.mvp/plugin-lock.json"
+g_brokenlock="$(cd "$gl_proj" && PLUGIN_ROOT="$gl_plugin" bash "$repo_root/lib/gate.sh" build 2>/dev/null | tail -n1)"
+assert_eq "gate-lock: битый lock — валит" "False" "$(json_field "$g_brokenlock" 'd["ok"]')"
+assert_eq "gate-lock: битый lock reason называет битый файл" \
+  "plugin-lock.json exists but is not valid JSON — cannot tell if agents match the plugin" \
+  "$(json_field "$g_brokenlock" 'd["reason"]')"
+if echo "$g_brokenlock" | grep -q "no .mvp/plugin-lock.json"; then
+  echo "FAIL: gate-lock: битый lock reason говорит про отсутствующий файл (тот же текст, что и для нет-lock): $g_brokenlock" >&2
+  fail=1
+fi
+rm "$gl_proj/.mvp/plugin-lock.json"
+
 # Обратный контроль: отсутствие lock БЕЗ единого собранного агента — не
 # валит (спека §7: "сравнить не с чем" — это не дрейф). Отдельный свежий
 # проект, чтобы не зависеть от мутаций gl_proj выше по файлу.
