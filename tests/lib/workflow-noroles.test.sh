@@ -15,6 +15,15 @@
 #     обязана попасть в контроль (arm=control), не в рукав (cap30).
 # (D) Находка I6: явный --task исключает задачу из рукава целиком — событие
 #     task_complete не несёт arm-полей вовсе.
+# (E) Второй проход финального ревью, слепая зона: АКТИВНЫЙ CAP-рукав целиком
+#     — обрыв первого сегмента → handoff.sh → сегмент продолжения с
+#     указателем → финализация с полями рукава. До этого сценария цикл рукава
+#     в оркестраторе не исполнялся ни одним тестом (только грепы и юниты).
+# (F) Тот же рукав, исчерпание сегментов: ровно CAP_SEGMENTS диспатчей
+#     имплементера, затем park с внятным текстом — не тихий успех.
+# (G) Все опросы ревью воздержались (обрыв/мёртвая роль) → park «ревью не
+#     состоялось», не тихое «ревью прошло чисто»; реплики сохранены как
+#     evidence, задача не закоммичена.
 set -u
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$here/../.." && pwd)"
@@ -127,6 +136,90 @@ assert_eq "(D) halt null" "None" "$(jq_out "$out" 'd["result"]["halt"]')"
 ev="$(tail -n 1 "$proj/.mvp/telemetry/events.jsonl")"
 assert_eq "(D) с явным task_id arm-полей нет" "False" "$(jq_out "$ev" '"arm" in d')"
 assert_eq "(D) с явным task_id segments-полей нет" "False" "$(jq_out "$ev" '"segments" in d')"
+rm -rf "$proj"
+
+# --- (E) активный рукав: обрыв → handoff → продолжение → финализация ---------
+# Задача 001 (task_index=0, чёт) + capped-файл + greedy-дефолт = armActive.
+# Первый имплементер-диспатч «обрывается» (IMPL_SILENT=1): пишет app/a.txt,
+# финального сообщения нет. Рукав обязан пройти handoff.sh, отдать агенту
+# продолжения указатель и довести задачу до коммита с полями рукава.
+proj="$(new_fixture)"
+mkdir -p "$proj/.claude/agents"
+echo x > "$proj/.claude/agents/general-purpose-capped.md"
+( cd "$proj" && git add .claude/agents/general-purpose-capped.md && git commit -q -m "chore: seed capped" )
+out="$(IMPL_SILENT=1 run_wf "$proj" "app/a.txt" '{}')" || { echo "FAIL: (E) harness упал" >&2; echo "$out" >&2; fail=1; }
+assert_eq "(E) halt null — рукав довёл задачу" "None" "$(jq_out "$out" 'd["result"]["halt"]')"
+assert_eq "(E) одна задача сделана" "1" "$(jq_out "$out" 'd["result"]["tasks_done"]')"
+# Оба сегмента шли на capped-роль, и ровно два
+assert_eq "(E) сегменты: implementer-001 и -seg2 на capped-роли" "['implementer-001', 'implementer-001-seg2']" \
+  "$(jq_out "$out" '[c["label"] for c in d["calls"] if c["agentType"]=="general-purpose-capped"]')"
+# Работа не теряется за швом: агент продолжения получил указатель handoff
+assert_eq "(E) первый сегмент без указателя" "False" \
+  "$(jq_out "$out" '[c for c in d["calls"] if c["label"]=="implementer-001"][0]["handoff_ref"]')"
+assert_eq "(E) сегмент продолжения несёт указатель handoff" "True" \
+  "$(jq_out "$out" '[c for c in d["calls"] if c["label"]=="implementer-001-seg2"][0]["handoff_ref"]')"
+# Указатель — настоящий файл с изложением сделанного (называет тронутый файл)
+grep -q 'a.txt' "$proj/.mvp/handoff-001.md" \
+  || { echo "FAIL: (E) .mvp/handoff-001.md не называет работу первого сегмента" >&2; fail=1; }
+# Работа первого (оборванного) сегмента дошла до коммита
+( cd "$proj" && git show HEAD:app/a.txt >/dev/null 2>&1 ) \
+  || { echo "FAIL: (E) app/a.txt не попал в коммит — работа потеряна за швом" >&2; fail=1; }
+# Телеметрия несёт поля рукава: активное плечо и число сегментов
+ev="$(tail -n 1 "$proj/.mvp/telemetry/events.jsonl")"
+assert_eq "(E) arm=cap30 в событии" "cap30" "$(jq_out "$ev" 'd["arm"]')"
+assert_eq "(E) segments=2 в событии" "2" "$(jq_out "$ev" 'd["segments"]')"
+rm -rf "$proj"
+
+# --- (F) активный рукав: исчерпание сегментов → park, не тихий успех ---------
+# Все имплементер-диспатчи молчат (IMPL_SILENT=99), дерево каждый раз грязное
+# — handoff.sh честно продолжает, пока workflow не упрётся в CAP_SEGMENTS.
+proj="$(new_fixture)"
+mkdir -p "$proj/.claude/agents"
+echo x > "$proj/.claude/agents/general-purpose-capped.md"
+( cd "$proj" && git add .claude/agents/general-purpose-capped.md && git commit -q -m "chore: seed capped" )
+n_before="$(cd "$proj" && git rev-list --count HEAD)"
+out="$(IMPL_SILENT=99 run_wf "$proj" "app/a.txt" '{}')" || { echo "FAIL: (F) harness упал" >&2; echo "$out" >&2; fail=1; }
+assert_eq "(F) halt stop-and-ask" "stop-and-ask" "$(jq_out "$out" 'd["result"]["halt"]')"
+assert_eq "(F) task_id в халте" "001" "$(jq_out "$out" 'd["result"]["task_id"]')"
+# Число сегментов ограничено: ровно CAP_SEGMENTS=4 имплементер-диспатча
+assert_eq "(F) ровно 4 имплементер-диспатча (CAP_SEGMENTS)" "4" \
+  "$(jq_out "$out" 'len([c for c in d["calls"] if (c["label"] or "").startswith("implementer")])')"
+# Park с внятным текстом: сколько сегментов, что исчерпано, как выйти из рукава
+assert_eq "(F) detail называет число сегментов" "True" "$(jq_out "$out" '"4 segment(s)" in d["result"]["detail"]')"
+assert_eq "(F) detail называет исчерпание" "True" "$(jq_out "$out" '"segments were exhausted" in d["result"]["detail"]')"
+assert_eq "(F) detail называет выход из рукава" "True" "$(jq_out "$out" '"Выход из рукава" in d["result"]["detail"]')"
+# Не тихий успех: задача failed, коммита нет, task_complete не писалось
+task_status="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print([t["status"] for t in p["tasks"] if t["id"]=="001"][0])' "$proj/.mvp/plan.json")"
+assert_eq "(F) задача 001 failed" "failed" "$task_status"
+assert_eq "(F) новых коммитов нет" "$n_before" "$(cd "$proj" && git rev-list --count HEAD)"
+[ ! -f "$proj/.mvp/telemetry/events.jsonl" ] \
+  || { echo "FAIL: (F) task_complete записан для незавершённой задачи" >&2; fail=1; }
+# park привёл дерево в порядок (вне .mvp — состояние stash'ится)
+dirty_outside="$(cd "$proj" && git status --porcelain | rtk proxy grep -v '\.mvp' || true)"
+assert_eq "(F) после park вне .mvp чисто" "" "$dirty_outside"
+rm -rf "$proj"
+
+# --- (G) все опросы ревью воздержались → park, не «ревью прошло чисто» -------
+proj="$(new_fixture)"
+n_before="$(cd "$proj" && git rev-list --count HEAD)"
+out="$(REVIEWER_SILENT=1 run_wf "$proj" "app/a.txt" '{}')" || { echo "FAIL: (G) harness упал" >&2; echo "$out" >&2; fail=1; }
+assert_eq "(G) halt stop-and-ask" "stop-and-ask" "$(jq_out "$out" 'd["result"]["halt"]')"
+assert_eq "(G) task_id в халте" "001" "$(jq_out "$out" 'd["result"]["task_id"]')"
+assert_eq "(G) detail: ни один опрос не ответил" "True" \
+  "$(jq_out "$out" '"review polls returned no text" in d["result"]["detail"]')"
+assert_eq "(G) detail: ревью не состоялось, вердикт невозможен" "True" \
+  "$(jq_out "$out" '"No review happened" in d["result"]["detail"]')"
+# Опросов было три, и каждая пустая реплика сохранена как evidence
+assert_eq "(G) три опроса ревью" "3" \
+  "$(jq_out "$out" 'len([c for c in d["calls"] if (c["label"] or "").startswith("reviewer-")])')"
+assert_eq "(G) три save-review релея" "3" \
+  "$(jq_out "$out" 'len([c for c in d["calls"] if (c["label"] or "").startswith("save-review-")])')"
+[ -f "$proj/.mvp/review/task-001.verdicts.md" ] \
+  || { echo "FAIL: (G) evidence-файл ревью не создан" >&2; fail=1; }
+# Не тихое «чисто»: задача failed, коммита нет
+task_status="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print([t["status"] for t in p["tasks"] if t["id"]=="001"][0])' "$proj/.mvp/plan.json")"
+assert_eq "(G) задача 001 failed" "failed" "$task_status"
+assert_eq "(G) новых коммитов нет" "$n_before" "$(cd "$proj" && git rev-list --count HEAD)"
 rm -rf "$proj"
 
 exit $fail

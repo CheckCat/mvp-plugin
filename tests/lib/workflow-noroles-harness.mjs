@@ -35,6 +35,16 @@ const WF = path.join(here, '..', '..', 'skills', 'build', 'workflow.mjs');
 const project = process.env.WF_PROJECT;
 const wfArgs = JSON.parse(process.env.WF_ARGS);
 const implFiles = (process.env.IMPL_FILES || '').split(',').filter(Boolean);
+// IMPL_SILENT=N: первые N имплементер-диспатчей «обрываются потолком ходов»
+// — пишут файлы (обрыв всегда оставляет правки), но НЕ возвращают финального
+// сообщения (null), ровно как реальный раннер на задушенном turn cap. Это
+// включает CAP-рукав в стенде: до сих пор активный рукав не исполнялся ни
+// одним тестом (стенд заходил только в контроль и в исключение по --task).
+// REVIEWER_SILENT=1: все опросы ревью возвращают null (обрыв/мёртвая роль) —
+// ветка «все воздержались» обязана давать park, а не тихий approve.
+const implSilent = Number(process.env.IMPL_SILENT || 0);
+const reviewerSilent = process.env.REVIEWER_SILENT === '1';
+let implDispatches = 0;
 
 const calls = [];
 const logs = [];
@@ -52,7 +62,15 @@ function runCmd(cmd) {
 }
 
 async function agentStub(prompt, opts = {}) {
-  calls.push({ agentType: opts.agentType || null, label: opts.label || null });
+  const call = { agentType: opts.agentType || null, label: opts.label || null };
+  const label = String(opts.label || '');
+  // Для имплементер-диспатчей фиксируем, нёс ли промпт указатель handoff —
+  // «работа не теряется за швом» проверяется именно по этому: агент
+  // продолжения обязан получить путь к изложению уже сделанного.
+  if (label.startsWith('implementer')) {
+    call.handoff_ref = String(prompt).includes('.mvp/handoff-');
+  }
+  calls.push(call);
   // Роли механики в этой фикстуре не существуют: реальный раннер на
   // неизвестный agentType возвращает пустой результат, не исключение.
   if (opts.agentType && String(opts.agentType).startsWith('mvp-')) return null;
@@ -66,16 +84,20 @@ async function agentStub(prompt, opts = {}) {
       return null;
     }
   }
-  const label = String(opts.label || '');
   if (label.startsWith('implementer')) {
     for (const f of implFiles) {
       const p = path.join(project, f);
       fs.mkdirSync(path.dirname(p), { recursive: true });
       fs.writeFileSync(p, 'HELLO\n');
     }
+    implDispatches += 1;
+    if (implDispatches <= implSilent) return null; // обрыв: правки есть, финального сообщения нет
     return `STATUS: DONE\nFILES: ${implFiles.join(', ')}`;
   }
-  if (label.startsWith('reviewer')) return 'VERDICT: approve\nCANNOT_VERIFY: none\nFINDINGS: []';
+  if (label.startsWith('reviewer')) {
+    if (reviewerSilent) return null; // обрыв/мёртвая роль: опрос воздерживается
+    return 'VERDICT: approve\nCANNOT_VERIFY: none\nFINDINGS: []';
+  }
   throw new Error(`harness: неожиданный свободнотекстовый диспатч label=${label}`);
 }
 
