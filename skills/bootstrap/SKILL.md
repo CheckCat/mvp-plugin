@@ -33,7 +33,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh get auto_closed_critical
 ${CLAUDE_PLUGIN_ROOT}/lib/state.sh init
 mkdir -p .mvp/briefs .mvp/reports .mvp/review .mvp/telemetry
 ```
-`init` идемпотентен — `.mvp/state.json` уже существует с прошлых фаз (brief/clarify), это ожидаемо, не ошибка.
+`init` идемпотентен — `.mvp/state.json` уже существует с прошлых фаз, это не ошибка.
 
 ## Шаг 3 — invariants.md + ci-mirror.sh
 
@@ -107,13 +107,13 @@ ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/assemble-agent.sh <role> [stack]
 ```
 Только роли из enum `role` в `skills/plan/references/plan-schema.json` — по ним `mvp:build` диспатчит агентов (`agentType`). Всегда: `backend-implementer <backend>`, `devops-engineer <deploy>.<backend>` (`<deploy>` из Stack), `test-writer <backend>`. Плюс `frontend-implementer <frontend>` при `frontend != none` и `integration-specialist`, если brief называет `integration-*`-сервисы. Ролей `validator`/`code-reviewer` нет — их гоняют инлайн-шаблоны `skills/build/agents/*.md`. `TEMPLATES_DIR`/`OUT_DIR` не трогай. Затем собери безусловные роли механики: `assemble-agent.sh mvp-reviewer`, `mvp-validator`, `mvp-relay` (без стека).
 
-В режиме experiments=greedy (дефолт при отсутствии ключа) после сборки ролей плана сделай capped-копии имплементерских ролей: `assemble-agent.sh --capped <role>`.
+В режиме experiments=greedy (дефолт при отсутствии ключа) после сборки ролей плана сделай capped-копии ВСЕХ собранных ролей плана (списки «Всегда»/«Плюс», не только *-implementer — без копии задачи роли молча выпадают из выборки рукава): `assemble-agent.sh --capped <role>`.
 
 Затем ОБЯЗАТЕЛЬНО:
 ```
 ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/verify-agents-drift.sh
 ```
-`ok:false` — НЕ правь `.claude/agents/*.md` руками, перезапусти `assemble-agent.sh` для роли из `data.violations`. Byte-substring-инвариант не ослабляется никогда — если мешает, значит сломан `assemble-agent.sh`, чини его, не проверку.
+`ok:false` — НЕ правь `.claude/agents/*.md` руками, перезапусти `assemble-agent.sh` для роли из `data.violations`. Byte-substring-инвариант не ослабляется никогда — если мешает, чини `assemble-agent.sh`, не проверку.
 
 ## Шаг 5 — CLAUDE.md + docs/architecture.md (творческая часть)
 
@@ -135,13 +135,12 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh set phase bootstrap-done
 ${CLAUDE_PLUGIN_ROOT}/lib/plugin-lock.sh seal
 ${CLAUDE_PLUGIN_ROOT}/lib/finalize.sh bootstrap <msg-file>
 ```
-`seal` — первичная печать нормативных файлов плагина: с этого момента
-проект помнит, от каких требований он собран, и `mvp:sync` сможет показать,
-что изменилось потом. Секцию `derived` печатать не нужно — её записал
+`seal` — первичная печать нормативных файлов плагина: проект запоминает,
+от каких требований собран, `mvp:sync` покажет, что изменилось потом. Секцию `derived` печатать не нужно — её записал
 `assemble-agent.sh` на Шаге 4. Пресет `bootstrap` стейджит `.mvp` целиком,
 так что `plugin-lock.json` попадает в bootstrap-коммит без правки пресета.
 
-`<msg-file>` первой строкой: `chore: bootstrap project meta`. Коммитит `CLAUDE.md docs/architecture.md .claude/agents .mvp` (пресет scope `bootstrap` в `finalize.sh`).
+`<msg-file>` первой строкой: `chore: bootstrap project meta`. Коммитит `CLAUDE.md docs/architecture.md .claude/agents .mvp` (пресет `bootstrap`).
 
 ## Rationalization table
 
@@ -153,7 +152,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/finalize.sh bootstrap <msg-file>
 
 ## HARD-GATE
 
-Прежде чем объявить шаг завершённым, покажи оператору:
+Покажи оператору:
 - содержимое `CLAUDE.md` и `docs/architecture.md` целиком;
 - список собранных агентов (`.claude/agents/*.md`) и `verify-agents-drift.sh` результат;
 - `.mvp/invariants.md` — особенно секцию `Forbidden edges`.

@@ -582,6 +582,14 @@ const RELAY_FALLBACK_LOG = 'mvp-relay did not dispatch; relay used a generic fal
 // receive file contents — only the command to run and a one-line JSON reply
 // back. Used directly (never via relay()'s JSON.parse layer) for commands
 // whose output is not itself JSON: `git rev-parse HEAD`, park()'s git reset.
+//
+// ИНВАРИАНТ (финальное ревью, второй проход): relayLine можно давать только
+// ИДЕМПОТЕНТНЫЕ команды. Узкий mvp-relay-фолбэк внутри — точка, где команда
+// может быть исполнена ПОВТОРНО: пустой ответ узкой роли не доказывает, что
+// команда не исполнялась, а generic-попытка запускает её ещё раз. У relayLine
+// нет opts.retryable — фолбэк безусловен, поэтому append/mutate-once команды
+// сюда нельзя вовсе (им — relay() с retryable:false). Сегодняшние вызовы это
+// соблюдают: `git stash push` на чистом дереве — no-op («No local changes»).
 async function relayLine(cmd, opts = {}) {
   const fullCmd = withCwd(cmd);
   const prompt = `Run exactly this command via Bash:\n${fullCmd}\nReturn the LAST line of stdout verbatim as {"line": "..."}. Do not add anything.`;

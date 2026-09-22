@@ -91,6 +91,20 @@ assert_eq "invalid --arm: events.jsonl не растёт" "$n_events_before" "$n
 task_status="$(python3 -c 'import json; p=json.load(open(".mvp/plan.json")); print([t["status"] for t in p["tasks"] if t["id"]=="003"][0])')"
 assert_eq "invalid --arm: задача 003 осталась pending" "pending" "$task_status"
 
+# (5c) второй проход финального ревью: невалидное --segments — то же
+# поведение, что (5b) для --arm. Раньше Number('abc')=NaN молча отбрасывался:
+# событие писалось БЕЗ поля segments (задача выпадала из mean_segments H1),
+# а задача при этом становилась done. Теперь честный отказ до любой мутации.
+n_events_before="$(wc -l < .mvp/telemetry/events.jsonl)"
+out="$(node "$repo_root/lib/plan-io.mjs" complete 003 --tokens 1 --dispatches 1 --arm cap30 --segments abc)"; ec=$?
+assert_eq "invalid --segments: exit code" "1" "$ec"
+assert_eq "invalid --segments: ok:false" "False" "$(jfield "$out" 'd["ok"]')"
+assert_eq "invalid --segments: reason называет значение" "True" "$(jfield "$out" '"abc" in d["reason"]')"
+n_events_after="$(wc -l < .mvp/telemetry/events.jsonl)"
+assert_eq "invalid --segments: events.jsonl не растёт" "$n_events_before" "$n_events_after"
+task_status="$(python3 -c 'import json; p=json.load(open(".mvp/plan.json")); print([t["status"] for t in p["tasks"] if t["id"]=="003"][0])')"
+assert_eq "invalid --segments: задача 003 осталась pending" "pending" "$task_status"
+
 # (6) mech_roles отражает СУЩЕСТВУЮЩИЕ файлы ролей механики (находка C1):
 # кладём только mvp-relay.md — relay true, reviewer/validator остаются false.
 # Заодно task_index: 001/002 done, next выдаёт 003 — третью позицию плана,
