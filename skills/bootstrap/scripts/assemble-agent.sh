@@ -18,9 +18,14 @@
 #      шаблоны легитимно содержат "${{ matrix.service }}" из GitHub Actions
 #      YAML, который substitution обязан не трогать).
 #
+# Исключение — роли с префиксом mvp-: механика пайплайна (reviewer/validator/
+# relay), а не инженер проекта. Шаблон копируется в OUT_DIR как есть, шаги
+# 1-5 (и _common.md) для них пропускаются целиком.
+#
 # Использование:
 #   assemble-agent.sh backend-implementer nestjs
 #   assemble-agent.sh integration-specialist   # роли без стек-вариантов
+#   assemble-agent.sh mvp-relay                # роль механики пайплайна
 #
 # Переменные окружения:
 #   TEMPLATES_DIR  — путь к шаблонам (default: <plugin>/skills/bootstrap/templates)
@@ -95,40 +100,49 @@ OUT="$OUT_DIR/$ROLE.md"
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 
-# 1. Frontmatter (от первого --- до второго ---, включительно)
-awk '
-  /^---$/ {
-    print
-    c++
-    if (c == 2) exit
-    next
-  }
-  c == 1 { print }
-' "$TEMPLATE" > "$TMP"
+case "$ROLE" in
+  mvp-*)
+    # mvp-роли — механика пайплайна, а не инженеры проекта: контракт границы
+    # задачи им не нужен, его отсутствие — и есть диета префикса (спека
+    # 2026-09-22 §4). Шаблон цельный (frontmatter + тело уже собраны автором
+    # шаблона) — копируем как есть, без _common.md и без placeholder-подстановки.
+    cp "$TEMPLATE" "$TMP"
+    ;;
+  *)
+    # 1. Frontmatter (от первого --- до второго ---, включительно)
+    awk '
+      /^---$/ {
+        print
+        c++
+        if (c == 2) exit
+        next
+      }
+      c == 1 { print }
+    ' "$TEMPLATE" > "$TMP"
 
-# 2. Пустая строка + _common.md целиком
-printf "\n" >> "$TMP"
-cat "$COMMON" >> "$TMP"
+    # 2. Пустая строка + _common.md целиком
+    printf "\n" >> "$TMP"
+    cat "$COMMON" >> "$TMP"
 
-# 3. Разделитель
-printf "\n---\n\n" >> "$TMP"
+    # 3. Разделитель
+    printf "\n---\n\n" >> "$TMP"
 
-# 4. Тело шаблона роли (всё после второго ---, ведущие пустые строки срезаются)
-awk '
-  /^---$/ { c++; next }
-  c >= 2 {
-    if (!started) {
-      if (NF == 0) next
-      started = 1
-    }
-    print
-  }
-' "$TEMPLATE" >> "$TMP"
+    # 4. Тело шаблона роли (всё после второго ---, ведущие пустые строки срезаются)
+    awk '
+      /^---$/ { c++; next }
+      c >= 2 {
+        if (!started) {
+          if (NF == 0) next
+          started = 1
+        }
+        print
+      }
+    ' "$TEMPLATE" >> "$TMP"
 
-# 5. Placeholder-подстановка: только три известных литерала, никакого generic
-#    "{{...}}" — не трогаем "${{ matrix.service }}" (GitHub Actions YAML) в
-#    devops-engineer.docker-dokploy.fastapi.template.md.
-AA_TMP="$TMP" PROJECT="$PROJECT" SERVICE_API="$SERVICE_API" SERVICE_WORKER="$SERVICE_WORKER" python3 -c '
+    # 5. Placeholder-подстановка: только три известных литерала, никакого generic
+    #    "{{...}}" — не трогаем "${{ matrix.service }}" (GitHub Actions YAML) в
+    #    devops-engineer.docker-dokploy.fastapi.template.md.
+    AA_TMP="$TMP" PROJECT="$PROJECT" SERVICE_API="$SERVICE_API" SERVICE_WORKER="$SERVICE_WORKER" python3 -c '
 import os
 path = os.environ["AA_TMP"]
 text = open(path, encoding="utf-8").read()
@@ -137,9 +151,11 @@ text = text.replace("{{SERVICE_API}}", os.environ["SERVICE_API"])
 text = text.replace("{{SERVICE_WORKER}}", os.environ["SERVICE_WORKER"])
 open(path, "w", encoding="utf-8").write(text)
 '
-if [ $? -ne 0 ]; then
-  fail "placeholder substitution failed" "python3 error while writing $TMP — see stderr above"
-fi
+    if [ $? -ne 0 ]; then
+      fail "placeholder substitution failed" "python3 error while writing $TMP — see stderr above"
+    fi
+    ;;
+esac
 
 mv "$TMP" "$OUT"
 trap - EXIT
