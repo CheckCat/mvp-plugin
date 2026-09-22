@@ -537,6 +537,14 @@ function cwdPrefixLine() {
     : '';
 }
 
+// RELAY_FALLBACK_LOG: emitted by both relayLine and relay (Task 5, "тот же
+// log") the one time a relay call has to fall back off the narrow
+// 'mvp-relay' agentType. A project bootstrapped before Task 4 shipped has no
+// .claude/agents/mvp-relay.md, so agent() resolves it to nothing — that must
+// not be fatal, only slower, hence the single generic-agentType retry below
+// before the existing retry/throw ladder runs.
+const RELAY_FALLBACK_LOG = 'mvp-relay did not dispatch; relay used a generic fallback — run mvp:sync and restart the session';
+
 // relayLine(cmd, opts) -> raw last-stdout-line string, unparsed. Relays never
 // receive file contents — only the command to run and a one-line JSON reply
 // back. Used directly (never via relay()'s JSON.parse layer) for commands
@@ -552,7 +560,12 @@ async function relayLine(cmd, opts = {}) {
     phase: opts.phase,
   };
   dispatchCount += 1;
-  const out = await agent(prompt, callOpts);
+  let out = await agent(prompt, { ...callOpts, agentType: 'mvp-relay' });
+  if (!out || typeof out.line !== 'string') {
+    log(RELAY_FALLBACK_LOG);
+    dispatchCount += 1;
+    out = await agent(prompt, callOpts);
+  }
   if (!out || typeof out.line !== 'string') {
     throw new Error(`relayLine: agent did not return a {line:string} object for cmd=${fullCmd}`);
   }
@@ -654,9 +667,9 @@ async function relay(cmd, opts = {}) {
     phase: opts.phase,
   };
 
-  const attempt = async () => {
+  const attempt = async (useAgentType) => {
     dispatchCount += 1;
-    const out = await agent(prompt, callOpts);
+    const out = await agent(prompt, useAgentType ? { ...callOpts, agentType: 'mvp-relay' } : callOpts);
     if (!out || (typeof out.ok !== 'boolean' && typeof out.ok !== 'string')) return null;
     try {
       const coerced = coerceRelayFields(out);
@@ -667,7 +680,7 @@ async function relay(cmd, opts = {}) {
     }
   };
 
-  let result = await attempt();
+  let result = await attempt(true);
   if (result) return result;
 
   if (!retryable) {
@@ -675,7 +688,12 @@ async function relay(cmd, opts = {}) {
       `relay: agent did not return a valid, coercible {ok:boolean,...} structured result (non-retryable command, no second attempt). cmd=${fullCmd}`,
     );
   }
-  result = await attempt();
+  // The existing retry (design note 12's single-retry ladder) doubles as the
+  // mvp-relay fallback: an unregistered narrow agentType returns null from
+  // attempt(true) exactly like a bad reply would, so this second attempt
+  // going generic costs nothing extra and rescues both cases identically.
+  log(RELAY_FALLBACK_LOG);
+  result = await attempt(false);
   if (result) return result;
   throw new Error(
     `relay: agent did not return a valid, coercible {ok:boolean,...} structured result after 1 retry. cmd=${fullCmd}`,
@@ -1113,10 +1131,11 @@ async function runValidateLadder(ctx) {
     return { parked: false };
   }
 
-  const verdictText = await agentText(validatorPrompt({ taskId: ctx.id, boundary: ctx.boundary, violations }), {
+  const verdictText = await dispatchAgentText(validatorPrompt({ taskId: ctx.id, boundary: ctx.boundary, violations }), {
     model: 'sonnet',
     phase: 'Validate',
     label: `validator-${ctx.id}`,
+    agentType: 'mvp-validator',
   });
   const verdict = parseValidatorVerdict(verdictText);
 
@@ -1244,9 +1263,12 @@ async function runReviewLadder(ctx) {
     // every task passes through is not the place to find out. The obvious
     // optimisation once that is pinned down — the polls are independent by
     // construction, they read one immutable package.
+    // agentType direct, NOT dispatchAgentText: a generic-agentType retry of
+    // a whole reviewer poll would erase the turn-cap saving this narrow role
+    // exists for, exactly on the long polls where it matters most.
     const text = await agentText(
       reviewerPrompt({ taskId: ctx.id, briefPath: ctx.briefPath, packagePath: rp.data.path }),
-      { model: 'sonnet', phase: 'Review', label },
+      { model: 'sonnet', phase: 'Review', label, agentType: 'mvp-reviewer' },
     );
     // Persisted BEFORE it is parsed: the reply is evidence whatever the parser
     // then makes of it, and an unparseable one is precisely the reply worth
@@ -1256,12 +1278,34 @@ async function runReviewLadder(ctx) {
       { phase: 'Review', label: `save-review-${ctx.id}-${i}`, retryable: false },
     );
     if (!saved.ok) log(`save-review.sh failed for ${label}: ${saved.reason || 'unknown'}`);
+    if (text == null) {
+      // «Обрыв ≠ отказ» (спека §6): потолок ходов или мёртвая роль дают null
+      // без финального сообщения. Такой опрос — ВОЗДЕРЖАВШИЙСЯ, не BLOCKED:
+      // save-review уже сохранил пустую реплику как evidence, в агрегацию
+      // вердиктов он не входит.
+      polls.push({ label, text: null, abstain: true, cannotVerify: null, verdict: { kind: 'none' } });
+      continue;
+    }
     polls.push({
       label,
       text,
       cannotVerify: parseCannotVerify(text),
       verdict: parseReviewerVerdict(text),
     });
+  }
+
+  // «Обрыв ≠ отказ» (спека §6, продолжение): опросы, где потолок ходов или
+  // мёртвая роль оборвали ответ, не голосуют. all-abstain — отдельный исход
+  // (park с честной причиной, не тихий approve по пустому findings), а
+  // частичный — concern на ledger, дальше агрегация идёт только по live.
+  const abstained = polls.filter((p) => p.abstain);
+  const live = polls.filter((p) => !p.abstain);
+  if (live.length === 0) {
+    return { parked: true, why: `all ${REVIEW_SAMPLES} review polls returned no text — either agentType "mvp-reviewer" is not registered `
+      + '(run mvp:sync, restart the session) or every poll hit its turn cap. No review happened, so no verdict is possible.' };
+  }
+  if (abstained.length) {
+    ctx.concerns.push(`${abstained.length} of ${REVIEW_SAMPLES} review polls returned no text (turn cap or dead agentType) and were counted as abstain`);
   }
 
   // CANNOT_VERIFY: reviewer.md tells reviewers to flag requirements they could
@@ -1272,9 +1316,11 @@ async function runReviewLadder(ctx) {
   // regularly carries a real defect in prose that its own FINDINGS array missed
   // (3 times in 84 replies) — parking threw that prose away with the task.
   // Now a MAJORITY halts, and a minority reaches the ledger as a concern so a
-  // human reads the prose either way.
-  const blind = polls.filter((p) => p.cannotVerify);
-  if (blind.length * 2 > REVIEW_SAMPLES) {
+  // human reads the prose either way. Base is `live`, not `polls`: an
+  // abstained poll never claimed CANNOT_VERIFY, so it must not count as if
+  // it had — nor dilute the majority denominator with a non-vote.
+  const blind = live.filter((p) => p.cannotVerify);
+  if (blind.length * 2 > live.length) {
     // Name the format violation separately, because it is NOT the same halt.
     // Measured (trellis task 019): of two polls counted blind, one had written
     // `CANNOT_VERIFY: none — ran npm run test:e2e myself: 15/15 pass`, i.e. it
@@ -1292,7 +1338,7 @@ async function runReviewLadder(ctx) {
       : '';
     return {
       parked: true,
-      why: `${blind.length} of ${REVIEW_SAMPLES} reviewers could not verify part of this task against the package: `
+      why: `${blind.length} of ${live.length} reviewers could not verify part of this task against the package: `
         + `${blind.map((p) => p.cannotVerify).join(' | ')}. `
         + 'A verdict issued over unverifiable requirements is not a gate — give the reviewer what it needs, or split the task.'
         + note,
@@ -1300,14 +1346,14 @@ async function runReviewLadder(ctx) {
   }
   for (const p of blind) {
     ctx.concerns.push(
-      `${p.label} could not verify part of this task (${REVIEW_SAMPLES - blind.length} of ${REVIEW_SAMPLES} polls could), `
+      `${p.label} could not verify part of this task (${live.length - blind.length} of ${live.length} polls could), `
       + `read its prose for a defect its FINDINGS may have missed: ${p.cannotVerify}`,
     );
   }
 
-  let findings = unionFindings(polls);
-  const patchPolls = polls.filter((p) => p.verdict.kind === 'patches');
-  const blockedPolls = polls.filter((p) => p.verdict.kind === 'verdict' && p.verdict.verdict === 'request-changes');
+  let findings = unionFindings(live);
+  const patchPolls = live.filter((p) => p.verdict.kind === 'patches');
+  const blockedPolls = live.filter((p) => p.verdict.kind === 'verdict' && p.verdict.verdict === 'request-changes');
 
   if (findings.length === 0 && blockedPolls.length > 0 && patchPolls.length === 0) {
     // Every poll that wanted to block emitted an empty or unparseable FINDINGS:
@@ -1323,7 +1369,7 @@ async function runReviewLadder(ctx) {
         reviewerPrompt({ taskId: ctx.id, briefPath: ctx.briefPath, packagePath: rp.data.path }),
         blockedPolls[0].text,
       ),
-      { model: 'sonnet', phase: 'Review', label },
+      { model: 'sonnet', phase: 'Review', label, agentType: 'mvp-reviewer' },
     );
     const savedRetry = await relay(
       `bash "${lib}/save-review.sh" "${ctx.id}" ${shQuote(label)} --b64 ${b64Payload(retryText == null ? '' : retryText)}`,
@@ -1343,7 +1389,7 @@ async function runReviewLadder(ctx) {
       return { parked: false };
     }
     if (retryVerdict.verdict === 'approve') {
-      ctx.concerns.push(`${blockedPolls.length} of ${REVIEW_SAMPLES} polls were unparseable; restated verdict was approve`);
+      ctx.concerns.push(`${blockedPolls.length} of ${live.length} polls were unparseable; restated verdict was approve`);
       return { parked: false };
     }
     if (!retryVerdict.findings || retryVerdict.findings.length === 0) {
@@ -1354,7 +1400,7 @@ async function runReviewLadder(ctx) {
       };
     }
     findings = retryVerdict.findings;
-    ctx.concerns.push(`${blockedPolls.length} of ${REVIEW_SAMPLES} polls were unparseable; findings taken from the restated reply`);
+    ctx.concerns.push(`${blockedPolls.length} of ${live.length} polls were unparseable; findings taken from the restated reply`);
   }
 
   if (findings.length === 0) {
@@ -1379,12 +1425,12 @@ async function runReviewLadder(ctx) {
   // pair carries, so applying both would race the fix agent against itself.
   if (patchPolls.length > 0) {
     ctx.concerns.push(
-      `${patchPolls.length} of ${REVIEW_SAMPLES} polls offered trivial PATCHES; superseded by the fix round because other polls raised real findings`,
+      `${patchPolls.length} of ${live.length} polls offered trivial PATCHES; superseded by the fix round because other polls raised real findings`,
     );
   }
-  if (findings.length > 0 && polls.some((p) => p.verdict.kind === 'verdict' && p.verdict.verdict === 'approve')) {
+  if (findings.length > 0 && live.some((p) => p.verdict.kind === 'verdict' && p.verdict.verdict === 'approve')) {
     ctx.concerns.push(
-      `review split: ${findings.length} finding(s) came from a minority of ${REVIEW_SAMPLES} polls — the others approved`,
+      `review split: ${findings.length} finding(s) came from a minority of ${live.length} polls — the others approved`,
     );
   }
 
@@ -1416,12 +1462,17 @@ async function runReviewLadder(ctx) {
     };
   }
 
-  const reReviewText = await agentText(
+  // dispatchAgentText, not the bare agentText the poll loop uses: this is a
+  // single adjudication, not one of three redundant samples, so its null is
+  // not a vote to abstain — a dead/unregistered 'mvp-reviewer' here would
+  // silently park an otherwise-finished task without the built-in
+  // general-purpose fallback.
+  const reReviewText = await dispatchAgentText(
     reReviewPrompt({ taskId: ctx.id, packagePath: rp.data.path, findings }),
-    { model: 'sonnet', phase: 'Review', label: `re-review-${ctx.id}` },
+    { model: 'sonnet', phase: 'Review', label: `re-review-${ctx.id}`, agentType: 'mvp-reviewer' },
   );
   if (reReviewText == null) {
-    return { parked: true, why: 're-review dispatch failed: agent returned no result' };
+    return { parked: true, why: 're-review dispatch failed: both agentType and general-purpose fallback returned no result' };
   }
   const verdicted = parseReReview(reReviewText);
 
