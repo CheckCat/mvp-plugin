@@ -183,4 +183,47 @@ assert d["data"]["derived_stale"] == [], "capped-файл не должен сч
 assert d["data"]["derived_tampered"] == [], "capped-файл не должен считаться tampered: %r" % d
 ' || { echo "FAIL: plugin-lock check на capped-копии" >&2; fail=1; }
 
+# (12) Fix round 1, находка 1: «замена, а не дублирование» — путь, где
+# фронтматтер УЖЕ содержит maxTurns, не был покрыт ни одним автотестом (8)
+# сборкой из шаблона роли: ни один имплементерский шаблон сегодня не несёт
+# maxTurns (он есть только у mvp-* шаблонов — механики, а Task 9 fix round 1
+# находка 3 запрещает --capped на них, см. (13) ниже — их нельзя использовать
+# для этого сценария через публичный CLI). Поэтому фикстура собирает
+# integration-specialist как обычно и ВРУЧНУЮ вставляет "maxTurns: 99" в его
+# фронтматтер до вызова --capped — это ровно то состояние источника, которое
+# должно быть заменено, а не задублировано. Свежий каталог, чтобы не смешаться
+# с capped-файлом из (8)-(11).
+tmpdir_replace="$(mktemp -d)"
+( cd "$tmpdir_replace" && git init -q . && mkdir -p .mvp && \
+  bash "$repo_root/skills/bootstrap/scripts/assemble-agent.sh" integration-specialist >/dev/null && \
+  python3 -c '
+p = ".claude/agents/integration-specialist.md"
+lines = open(p, encoding="utf-8").read().split("\n")
+assert lines[0] == "---"
+end = next(i for i in range(1, len(lines)) if lines[i] == "---")
+lines.insert(end, "maxTurns: 99")
+open(p, "w", encoding="utf-8").write("\n".join(lines))
+' && \
+  bash "$repo_root/skills/bootstrap/scripts/assemble-agent.sh" --capped integration-specialist >/dev/null )
+n_maxturns="$(cd "$tmpdir_replace" && awk 'NR==1&&$0=="---"{i=1;next} i&&$0=="---"{exit} i&&index($0,"maxTurns:")==1' .claude/agents/integration-specialist-capped.md | wc -l | tr -d ' ')"
+val_maxturns="$(cd "$tmpdir_replace" && fm_field .claude/agents/integration-specialist-capped.md maxTurns)"
+rm -rf "$tmpdir_replace"
+[ "$n_maxturns" = "1" ] || { echo "FAIL: замена maxTurns продублировала строку вместо замены (строк: $n_maxturns)" >&2; fail=1; }
+[ "$val_maxturns" = "30" ] || { echo "FAIL: замена maxTurns не обновила значение (получено: $val_maxturns)" >&2; fail=1; }
+
+# (13) Fix round 1, находка 3: --capped отклоняет роли механики (mvp-*) —
+# capped-копии — эксперимент над имплементерскими ролями (SKILL, Шаг 4), а
+# mvp-* собираются без _common.md по конструкции (case "$ROLE" in mvp-*)
+# выше по файлу), и молчаливая capped-копия такой роли не проходила бы
+# verify-agents-drift.sh осмысленно.
+tmpdir_mvp="$(mktemp -d)"
+( cd "$tmpdir_mvp" && git init -q . && mkdir -p .mvp && \
+  bash "$repo_root/skills/bootstrap/scripts/assemble-agent.sh" mvp-relay >/dev/null )
+out_mvp="$(cd "$tmpdir_mvp" && bash "$repo_root/skills/bootstrap/scripts/assemble-agent.sh" --capped mvp-relay | tail -n 1)"
+capped_mvp_exists="$([ -f "$tmpdir_mvp/.claude/agents/mvp-relay-capped.md" ] && echo yes || echo no)"
+rm -rf "$tmpdir_mvp"
+echo "$out_mvp" | grep -q '"ok": false' || { echo "FAIL: --capped mvp-relay должен отклоняться (ok:false): $out_mvp" >&2; fail=1; }
+echo "$out_mvp" | grep -qi "mvp-\*\|mechanic\|pipeline-mechanic" || { echo "FAIL: reason/hint не называет причину отказа (mvp-*/механика): $out_mvp" >&2; fail=1; }
+[ "$capped_mvp_exists" = "no" ] || { echo "FAIL: --capped mvp-relay не должен создавать файл при отказе" >&2; fail=1; }
+
 exit $fail

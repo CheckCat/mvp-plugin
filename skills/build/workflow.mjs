@@ -1806,9 +1806,30 @@ async function runOneTask(adv, tasksDone) {
       );
     }
     if (implText == null) {
-      const why = handoffReason
-        ? `implementer (cap arm) returned no text after ${segments} segment(s); handoff.sh declined to continue: ${handoffReason}`
-        : `implementer (cap arm) returned no text after ${segments} segment(s) — ${CAP_SEGMENTS} segments were exhausted with handoff.sh still returning ok:true each time`;
+      // «Агента вообще не было» ≠ «обрыв потолком ходов» (fix round 1,
+      // находка 2). Обрыв ВСЕГДА оставляет правки (агент успел поработать),
+      // поэтому дерево грязное. Если самый первый диспатч (segments===1 —
+      // ни одного витка цикла handoff ещё не прошло успешно) вернул null И
+      // handoff.sh уже нашёл дерево чистым (handoffReason установлен на этом
+      // самом первом витке) — значит capped-роль не запустилась НИ РАЗУ.
+      // Самая частая причина — agentType не зарегистрирован в текущей сессии
+      // (файл `<role>-capped.md` собран `assemble-agent.sh --capped` в этой
+      // же сессии; агенты регистрируются только при СТАРТЕ сессии — тот же
+      // класс проблемы, что ниже в ветке agentTypeFallbacks для обычных
+      // ролей). Обычный случай «сегменты исчерпаны» (агент реально работал и
+      // упирался в потолок несколько раз подряд) должен сохранить свой текст
+      // без изменений — здесь только разбита прежняя ветка `handoffReason`
+      // на «сработала на первом же витке» и «сработала позже».
+      const neverStarted = segments === 1 && handoffReason != null;
+      const why = neverStarted
+        ? `agentType "${adv.data.capped_role}" produced no text on the very first dispatch attempt, and the git tree `
+          + 'is clean — no work happened at all. Agents register at session start, so a capped-role file assembled '
+          + 'with `assemble-agent.sh --capped` in THIS session is not dispatchable until the next one — restart the '
+          + `session and re-run this task. If .claude/agents/${adv.data.capped_role}.md does not exist at all, `
+          + `mvp:bootstrap's cap step for this role never ran — fix that first. (handoff.sh: ${handoffReason})`
+        : handoffReason
+          ? `implementer (cap arm) returned no text after ${segments} segment(s); handoff.sh declined to continue: ${handoffReason}`
+          : `implementer (cap arm) returned no text after ${segments} segment(s) — ${CAP_SEGMENTS} segments were exhausted with handoff.sh still returning ok:true each time`;
       return park(id, boundary, why);
     }
   } else {

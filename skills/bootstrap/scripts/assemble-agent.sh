@@ -85,6 +85,18 @@ if [ "${1:-}" = "--capped" ]; then
   if [ -z "$CAP_ROLE" ]; then
     fail "missing role" "usage: assemble-agent.sh --capped <role>"
   fi
+  case "$CAP_ROLE" in
+    mvp-*)
+      # Роли механики пайплайна (reviewer/validator/relay) собираются БЕЗ
+      # _common.md (см. case "$ROLE" in mvp-*) ниже) — capped-копии из них
+      # были бы копиями без общего контракта, а SKILL (Шаг 4 bootstrap)
+      # декларирует capped-копии только для имплементерских ролей. Отказ
+      # здесь, а не молчаливая сборка чего-то, что verify-agents-drift.sh
+      # потом не сможет проверить как имплементерскую роль.
+      fail "role=$CAP_ROLE is a pipeline-mechanic role (mvp-*) — --capped is for implementer roles only" \
+        "mvp-* roles are assembled without the _common.md contract by design; a capped copy of one is not the H1 experiment this flag is for"
+      ;;
+  esac
   CAP_OUT_DIR="${OUT_DIR:-.claude/agents}"
   CAP_SRC="$CAP_OUT_DIR/$CAP_ROLE.md"
   CAP_DST="$CAP_OUT_DIR/$CAP_ROLE-capped.md"

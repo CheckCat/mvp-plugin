@@ -142,6 +142,32 @@ need_code "const CAP_SEGMENTS = 4;" "нет фиксированного пот�
 # ролей выше, а не голое "нашлось хоть раз".
 need_count_code "dispatchCount \+= 1" "5" "рукав добавил новую статическую точку инкремента dispatchCount сверх agentText/relay — CAP-путь обязан ходить только через них"
 
+# CAP-рукав, fix round 1, находка 2: «агента вообще не было» (незарегистрированная
+# capped-роль — файл на диске есть, но текущая сессия не подхватила его при
+# старте) обязана иметь СВОЙ park-текст, отдельный от «сегменты исчерпаны».
+# Тот же приём, что для armEligible/armActive выше — пин на точное выражение,
+# не на голую встречаемость подстроки "neverStarted".
+need_code "const neverStarted = segments === 1 && handoffReason != null;" "дискриминатор «агента вообще не было» обязан требовать И первый сегмент, И handoffReason — иначе не отличит незарегистрированную роль от обычного обрыва"
+
+# Новый диагностический текст обязан называть вероятную причину (сессия) и
+# действие (рестарт) — по образцу текста для agentTypeFallbacks в обычной
+# ветке ниже (already covered by "restart the session" не проверяем — она
+# специфична для обычной ветки; здесь пиннуем именно cap-формулировку).
+need_code "produced no text on the very first dispatch attempt" "новый park-текст для «агента вообще не было» не найден вне комментариев — диагностика деградировала обратно к общей фразе"
+need_code "restart the session and" "новый park-текст обязан называть действие (перезапуск сессии), а не только факт"
+
+# Нормальный случай («сегменты исчерпаны», агент реально работал) обязан
+# СОХРАНИТЬ свой текст без изменений — иначе fix round 1 находки 2 тихо
+# перезаписал бы соседнюю, ранее рабочую диагностику.
+need_code "implementer \(cap arm\) returned no text after \\\$\{segments\} segment\(s\); handoff\.sh declined to continue: \\\$\{handoffReason\}" "текст «handoff.sh declined to continue» (не-первый сегмент, обычный обрыв) не должен исчезнуть — сохраняется без изменений"
+need_code "implementer \(cap arm\) returned no text after \\\$\{segments\} segment\(s\) — \\\$\{CAP_SEGMENTS\} segments were exhausted" "текст «сегменты исчерпаны» (агент работал, дерево грязное) не должен исчезнуть — сохраняется без изменений"
+
+# handoffReason — причина от handoff.sh — обязана звучать в ОБОИХ ветках
+# (новой «never started» и старой «declined to continue»), не потеряться при
+# разводке. Считаем подстановку `${handoffReason}` вне комментариев — ровно 2
+# точки (было 1 до этого фикса).
+need_count_code "\\\$\{handoffReason\}" "2" "причина handoff.sh обязана звучать в ОБЕИХ park-ветках (new «never started» + старая «declined to continue»), не потеряться при разводке текста"
+
 # Sanity-parse (та же команда, что в Global Constraints)
 node -e "const src=require('fs').readFileSync('$wf','utf8').replace(/^export const meta[\s\S]*?^}/m,''); new (Object.getPrototypeOf(async function(){}).constructor)('agent','parallel','pipeline','log','phase','args','budget','workflow', src)" || { echo "FAIL: sanity-parse" >&2; fail=1; }
 
