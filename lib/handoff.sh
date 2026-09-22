@@ -41,6 +41,19 @@
 #     после байтового потолка отбрасывается, не превращаясь в мусор
 #     посреди кириллицы (в этом репозитории комментарии и markdown — на
 #     русском).
+#
+# Round 3 fix (ре-ревью раунда 2, переклассифицировано в Important):
+#   раунд 2 убрал per-file порог на untracked-файл, который был в раунде 1,
+#   и стал читать/склеивать ВСЕ не-бинарные untracked-файлы целиком,
+#   применяя общий потолок только к итоговой склейке. Обход алфавитный
+#   (git ls-files), поэтому один крупный артефакт/дамп, оказавшийся раньше
+#   по имени, съедал весь байтовый бюджет — от всех файлов после него в
+#   указателе не оставалось ни байта содержимого, только имя в списке.
+#   Вернул отсечение по размеру НА УРОВНЕ ОТДЕЛЬНОГО ФАЙЛА, до склейки:
+#   файл больше FILE_CAP получает ту же видимую пометку, что и бинарный,
+#   вместо содержимого. Общий потолок (DIFF_CAP/BYTES_CAP) остаётся вторым
+#   рубежом поверх — на случай когда много мелких файлов вместе всё равно
+#   превышают бюджет.
 set -u
 
 # emit_result <ok:true|false> <reason> <hint> <data-json-or-empty>
@@ -81,6 +94,11 @@ fi
 
 DIFF_CAP=4000       # строк
 BYTES_CAP=102400    # 100KB
+FILE_CAP=51200      # 50KB — потолок на ОТДЕЛЬНЫЙ untracked-файл (round 3
+                    # fix): половина общего байтового потолка, тот же
+                    # выбор, что уже был обоснован в round 1 для этой роли
+                    # (оставляет место под обвязку/другие файлы, не даёт
+                    # одному артефакту съесть весь бюджет до общего среза)
 
 status="$(git status --porcelain 2>/dev/null)" || {
   emit_result false "not a git repo" "" ""
@@ -125,7 +143,7 @@ BUILD_JSON="$(
   HO_TASK="$TASK" HO_SEG="$SEG" HO_OUT_DIR=".mvp" HO_OUT_NAME="handoff-$TASK.md" \
   HO_STATUS_FILE="$work/status.txt" HO_DIFF_FILE="$work/diff.txt" \
   HO_UNTRACKED_FILE="$work/untracked.nul" \
-  HO_DIFF_CAP="$DIFF_CAP" HO_BYTES_CAP="$BYTES_CAP" \
+  HO_DIFF_CAP="$DIFF_CAP" HO_BYTES_CAP="$BYTES_CAP" HO_FILE_CAP="$FILE_CAP" \
   python3 - <<'PY'
 import json, os, sys, tempfile
 
@@ -161,6 +179,7 @@ try:
     out_path = os.path.join(out_dir, out_name)
     diff_cap = int(os.environ["HO_DIFF_CAP"])
     bytes_cap = int(os.environ["HO_BYTES_CAP"])
+    file_cap = int(os.environ["HO_FILE_CAP"])
 
     with open(os.environ["HO_STATUS_FILE"], encoding="utf-8", errors="replace") as fh:
         status_text = fh.read()
@@ -172,6 +191,7 @@ try:
 
     parts = [diff_text]
     skipped_binary = []
+    skipped_large = []
     for f in untracked:
         if not os.path.isfile(f):
             continue
@@ -180,6 +200,24 @@ try:
             parts.append(
                 "diff --git a/%s b/%s\nnew file\n"
                 "[BINARY FILE — содержимое пропущено (round 2 fix B): %s]\n" % (f, f, f)
+            )
+            continue
+        try:
+            fsize = os.path.getsize(f)
+        except OSError:
+            fsize = file_cap + 1  # неизвестный размер — не встраиваем (fail closed)
+        if fsize > file_cap:
+            # Round 3 fix: отсечение ПО ОТДЕЛЬНОМУ ФАЙЛУ, до склейки в общий
+            # diff_output. Без этого один крупный файл, идущий раньше по
+            # алфавиту в git ls-files, съедал общий байтовый потолок целиком
+            # и вытеснял содержимое всех файлов после себя — а они как раз
+            # обычно собственная незакоммиченная работа агента, в отличие от
+            # крупного файла, который чаще артефакт сборки/дамп.
+            skipped_large.append(f)
+            parts.append(
+                "diff --git a/%s b/%s\nnew file\n"
+                "[FILE TOO LARGE — содержимое пропущено (round 3 fix, %d > %d bytes): %s]\n"
+                % (f, f, fsize, file_cap, f)
             )
             continue
         with open(f, encoding="utf-8", errors="replace") as fh:
@@ -230,6 +268,14 @@ try:
             "## Похожие на бинарные — содержимое НЕ встроено (round 2 fix B)",
             "```",
             "\n".join(skipped_binary),
+            "```",
+        ]
+    if skipped_large:
+        body += [
+            "",
+            "## Слишком крупные (> %d байт) — содержимое НЕ встроено (round 3 fix)" % file_cap,
+            "```",
+            "\n".join(skipped_large),
             "```",
         ]
     body += [

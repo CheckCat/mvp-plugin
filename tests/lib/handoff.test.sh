@@ -170,11 +170,19 @@ assert_eq "HEAD unchanged" "$head_before" "$head_after"
 assert_eq "index (staged) unchanged" "$staged_before" "$staged_after"
 assert_eq "nothing outside .mvp touched" "$outside_before" "$outside_after"
 
-# (11) потолок по байтам: однострочный большой файл в СВОЁМ изолированном
-# дереве (round 2 fix C) — ничего от других сценариев рядом.
+# (11) потолок по байтам: огромный ДИФФ ОТСЛЕЖИВАЕМОГО файла в СВОЁМ
+# изолированном дереве (round 2 fix C) — ничего от других сценариев рядом.
+# round 3 fix ввёл отдельный per-file потолок для UNTRACKED-файлов
+# (см. сценарий 12a) — однострочный untracked-монстр теперь перехватывается
+# ИМ раньше, чем успевает добраться до общего байтового среза, так что для
+# проверки именно общего BYTES_CAP нужен путь, который per-file потолку не
+# подчиняется: git diff HEAD у отслеживаемого файла per-file-порогу не
+# подвергается вообще (тот применяется только к содержимому untracked-
+# файлов при встраивании).
 new_repo >/dev/null
 mkdir -p src
-python3 -c "open('src/monster.txt','w').write('*'*200000)"  # 200KB в одну строку
+echo x > src/monster.txt && git add src/monster.txt && git commit -qm "track monster"
+python3 -c "open('src/monster.txt','w').write('*'*200000)"  # 200KB в одну строку, tracked-правка
 out="$(bash "$handoff" 010 1 | tail -n 1)"
 assert_eq "big single-line ok" "True" "$(ok_of "$out")"
 p="$(O="$out" python3 -c 'import json,os; print(json.loads(os.environ["O"])["data"]["path"])')"
@@ -195,6 +203,22 @@ grep -q "BINARY FILE" "$p" || { echo "FAIL: нет пометки о пропу�
 grep -q "blob.bin" "$p" || { echo "FAIL: имя бинарного файла не видно в указателе" >&2; fail=1; }
 grep -q "SECRETPAYLOAD" "$p" && { echo "FAIL: содержимое бинарного файла встроено в текстовый указатель" >&2; fail=1; }
 true
+
+# (12a) round 3 fix — крупный untracked-файл, идущий РАНЬШЕ по алфавиту,
+# не должен вытеснять содержимое мелкого файла, идущего позже. Раунд 2
+# читал/склеивал все не-бинарные untracked-файлы целиком и резал только
+# итоговую склейку — один крупный артефакт съедал общий бюджет и от всех
+# файлов после него в указателе не оставалось ни байта содержимого.
+new_repo >/dev/null
+mkdir -p src
+python3 -c "open('src/aaa_big.txt','w').write('x'*160000)"  # раньше по алфавиту, крупный
+printf 'SMALLMARKER\n' > src/zzz_small.txt                  # позже по алфавиту, маленький
+out="$(bash "$handoff" 016 1 | tail -n 1)"
+assert_eq "large-then-small ok" "True" "$(ok_of "$out")"
+p="$(O="$out" python3 -c 'import json,os; print(json.loads(os.environ["O"])["data"]["path"])')"
+grep -q "SMALLMARKER" "$p" || { echo "FAIL: содержимое маленького файла вытеснено крупным (round 3 regression)" >&2; fail=1; }
+grep -q "FILE TOO LARGE" "$p" || { echo "FAIL: нет пометки о пропущенном крупном файле" >&2; fail=1; }
+grep -q "aaa_big.txt" "$p" || { echo "FAIL: имя крупного файла не видно в указателе" >&2; fail=1; }
 
 # (13) round 2 fix E — усечение по байтовому потолку не должно рвать
 # UTF-8: указатель целиком остаётся валидным UTF-8 даже когда обрезка
