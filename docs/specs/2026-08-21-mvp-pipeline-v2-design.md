@@ -81,6 +81,14 @@ mvp-plugin/
     fixtures/                       # plan-3tasks.json, brief-минимум, синтетический репо dry-run
 ```
 
+С 2026-09-22 опросы ревью/валидации и relay-мостики диспатчатся через
+собственные узкие роли `mvp-reviewer`/`mvp-validator`/`mvp-relay`
+(`skills/build/agents/*.md` из §4 выше остаются контрактом текста промпта,
+эти роли лишь сужают tools/maxTurns диспатча), а сами гипотезы о диете
+проверяет `lib/experiments.sh` + `scripts/experiments/`; содержимое не
+дублируется здесь — см.
+`docs/specs/2026-09-22-token-diet-and-experiments-design.md`.
+
 Правила оформления скиллов (по writing-skills):
 - **description = только триггер**, никогда workflow. Пример: `mvp:build` → «Use when
   .claude/state/plan.json exists and implementation should proceed».

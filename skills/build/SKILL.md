@@ -29,6 +29,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/gate.sh build
 - `--tasks N` → `max_tasks` (жёсткий cap задач за этот запуск). Флаг не задан → `999` («до конца плана или до halt»).
 - `--task <id>` → `task_id`. При явном `--task` `max_tasks` не работает как cap (передай `1` — validateArgs требует положительное число всегда), Workflow остановится после этой одной задачи.
 - `+NNNk` (токен-потолок) — **не поле args Workflow.** `validateArgs` в `workflow.mjs` проверяет только `run_id/now/plugin_root/max_tasks` (+опц. `project_root`) — бюджета там нет; это величина Workflow-рантайма (`budget.spent()`), скрипт не режет по ней в середине задачи. Держи `NNNk*1000` как свой потолок: после каждого `halt:null` суммируй `results[].tokens_delta`, при превышении предупреди оператора в сводке — это предупреждение, не hard-cap.
+- Флаг `experiments` живёт в `.mvp/state.json` (`greedy`-дефолт | `passive` | `off`): greedy может вести CAP-рукав на чётном срезе задач — прогон и число диспатчей это не удваивает никогда (закон недублирования, спека 2026-09-22).
 
 ## Шаг 3 — запуск
 
@@ -55,7 +56,7 @@ Workflow({
 | `stop-and-ask` | `task_id`, `detail` = причина `park()` (BLOCKED/NEEDS_CONTEXT текст implementer'а, исчерпанная validate/review-лестница, **неполный ревью-пакет** — `review package is incomplete — ... truncated` / `reviewer could not verify ...`, либо **роль не продиспатчилась** — `agentType "<role>" did not dispatch`) † | Проверь `task_id` в `.mvp/plan.json` (уже `failed`, дерево чистое — `park()` делает `git checkout`+unstage) и `.mvp/blockers.md` (пишет агент по контракту `_common.md`, не `workflow.mjs`). `AskUserQuestion` с этим контекстом; решение — строкой в `.mvp/decisions.log` (Write/Edit append: `[task_id] решение — обоснование`; журнал оператора, не pipeline-state). Перезапусти ту же задачу явным `task_id`. **`did not dispatch`** — не ruling, а перезапуск сессии: есть `.claude/agents/<role>.md` → перезапусти сессию (роли регистрируются при старте); нет → роль не собрана.<br><br>**Блокер вне границы задачи?** Заведи отдельную: `plan-io.mjs add-task --json '{...}'` (id, `pending`, только если план валиден). Не правь plan.json руками и не пиши блокер в `blockers.md` — так на vireo потерялся циклический импорт, ронявший два деплой-юнита. |
 | `bad-args` / `error` | `detail`; у `error` ещё `in_flight_task`, `recovery: parked\|failed` † | Сбой окружения/аргументов. Покажи `detail`. **`recovery: failed` → сначала дерево:** `git status`, снеси незакоммиченное под границей упавшей задачи (она `pending`, гейты не проходила), потом перезапуск. Фикс причины — Stop&Ask. |
 
-† halt≠null никогда не несёт `results`/`tasks_done` — даже если этот же запуск уже закоммитил задачи раньше в своём цикле: all-done/dag-stuck/interrupt/dirty-tree отдают единый `{halt, detail}` из `workflow.mjs` без ветки для накопленных `results`; `stop-and-ask` возвращается из `park()` до `results.push()` текущей задачи. Что реально закоммичено этим run — смотри `ledger.md`/`git log`, не payload.
+† halt≠null никогда не несёт `results`/`tasks_done` — даже если запуск уже коммитил задачи раньше в цикле: all-done/dag-stuck/interrupt/dirty-tree отдают единый `{halt, detail}` без ветки для накопленных `results`; `stop-and-ask` возвращается из `park()` до `results.push()`. Что реально закоммичено этим run — смотри `ledger.md`/`git log`, не payload.
 
 ## «Rulings, not stalls»
 
