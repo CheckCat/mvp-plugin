@@ -94,14 +94,33 @@ PY
     mkdir -p .mvp/experiments
     while IFS= read -r row; do
       [ -n "$row" ] || continue
-      id="$(R="$row" python3 -c 'import json,os; print(json.loads(os.environ["R"])["id"])')"
-      script_rel="$(R="$row" python3 -c 'import json,os; print(json.loads(os.environ["R"])["check_script"])')"
+      # id + check_script — одним вызовом python на строку $row (было два
+      # отдельных вызова на один и тот же JSON; финальное ревью). Разделитель
+      # — таб: оба поля реестра простые строки-идентификаторы/пути, табов не
+      # несут.
+      IFS=$'\t' read -r id script_rel <<<"$(R="$row" python3 -c 'import json,os; h=json.loads(os.environ["R"]); print(h["id"] + "\t" + h["check_script"])')"
       script="$PLUGIN_ROOT/$script_rel"
       if [ ! -f "$script" ]; then
         summary="$(S="$summary" I="$id" python3 -c 'import json,os; s=json.loads(os.environ["S"]); s.append({"id":os.environ["I"],"note":"script missing"}); print(json.dumps(s))')"
         continue
       fi
-      out_line="$(HYP_ID="$id" RUN_LABEL="$run_label" RESULTS_PATH="$RESULTS" PLUGIN_ROOT="$PLUGIN_ROOT" PROJECT_ROOT="$(pwd)" bash "$script" 2>/dev/null | tail -n 1)" || out_line=""
+      # Без pipe: раньше было `bash "$script" | tail -n1` внутри `out_line="$(...)"`
+      # — и без pipefail код возврата брался от tail (правая команда пайпа,
+      # почти никогда не падает), так что прежняя `|| out_line=""` была
+      # мертва (финальное ревью). ${PIPESTATUS[0]} эту проблему НЕ чинит:
+      # весь пайп исполняется внутри субшелла command substitution, а
+      # PIPESTATUS субшелла в родительский не просачивается (было
+      # перепроверено эмпирически — так и оставался 0 на упавшем скрипте).
+      # Лекарство — убрать сам pipe: захватываем ПОЛНЫЙ stdout одной простой
+      # командой (не пайпом), `$?` после неё — реальный exit code скрипта;
+      # tail-n1 делаем ОТДЕЛЬНЫМ шагом над уже захваченной строкой.
+      full_out="$(HYP_ID="$id" RUN_LABEL="$run_label" RESULTS_PATH="$RESULTS" PLUGIN_ROOT="$PLUGIN_ROOT" PROJECT_ROOT="$(pwd)" bash "$script" 2>/dev/null)"
+      script_rc=$?
+      out_line="$(printf '%s\n' "$full_out" | tail -n 1)"
+      # Если скрипт упал, не доверяем его stdout, даже если тот выглядит как
+      # валидный JSON (мог напечатать контрактную строку и упасть уже после)
+      # — обнуляем, дальше пустая строка уже трактуется как ok:false.
+      [ "$script_rc" -eq 0 ] || out_line=""
       appended="$(O="$out_line" I="$id" L="$run_label" RES="$RESULTS" python3 <<'PY'
 import json, os, datetime
 try:
@@ -155,10 +174,12 @@ if not re.search(r"\d", str(h["threshold"])):
 if h["status"] not in ("open", "needs-optin"):
     print(json.dumps({"ok": False, "reason": "new hypothesis must start open or needs-optin", "hint": None, "data": None})); sys.exit(1)
 try:
-    reg = json.load(open(os.environ["E_REG"]))
+    reg_text = open(os.environ["E_REG"], encoding="utf-8").read()
 except FileNotFoundError:
     print(json.dumps({"ok": False, "reason": "registry not found: %s" % os.environ["E_REG"],
                       "hint": "create docs/experiments/registry.json (see plan \u00a77) or fix PLUGIN_ROOT", "data": None})); sys.exit(1)
+try:
+    reg = json.loads(reg_text)
 except json.JSONDecodeError as e:
     print(json.dumps({"ok": False, "reason": "registry is not valid JSON: %s" % e,
                       "hint": "fix docs/experiments/registry.json by hand \u2014 the reader does not auto-repair it", "data": None})); sys.exit(1)
@@ -167,10 +188,36 @@ if any(x["id"] == h["id"] for x in reg["hypotheses"]):
 n_open = sum(1 for x in reg["hypotheses"] if x["status"] in ("open", "needs-optin"))
 if n_open >= reg.get("max_open", 5):
     print(json.dumps({"ok": False, "reason": "max_open reached (%d open)" % n_open, "hint": "close one hypothesis (move its verdict to an observation and delete the row) before adding another", "data": None})); sys.exit(1)
-reg["hypotheses"].append(h)
+
+# \u0422\u043e\u0447\u0435\u0447\u043d\u0430\u044f \u0432\u0441\u0442\u0430\u0432\u043a\u0430 \u0432 \u0421\u042b\u0420\u041e\u0419 \u0422\u0415\u041a\u0421\u0422 \u0444\u0430\u0439\u043b\u0430, \u0430 \u043d\u0435 json.dump(reg, ...) \u043f\u043e\u0432\u0435\u0440\u0445
+# \u0440\u0430\u0441\u043f\u0430\u0440\u0441\u0435\u043d\u043d\u043e\u0433\u043e \u043e\u0431\u044a\u0435\u043a\u0442\u0430 (\u0444\u0438\u043d\u0430\u043b\u044c\u043d\u043e\u0435 \u0440\u0435\u0432\u044c\u044e, \u043d\u0430\u0445\u043e\u0434\u043a\u0430 5d): \u0440\u0435\u0435\u0441\u0442\u0440 \u044d\u0442\u043e\u0433\u043e \u0440\u0435\u043f\u043e
+# \u0432\u0440\u0443\u0447\u043d\u0443\u044e \u043e\u0442\u0444\u043e\u0440\u043c\u0430\u0442\u0438\u0440\u043e\u0432\u0430\u043d \u043a\u043e\u043c\u043f\u0430\u043a\u0442\u043d\u043e (\u043d\u0435\u0441\u043a\u043e\u043b\u044c\u043a\u043e \u043f\u043e\u043b\u0435\u0439 \u043d\u0430 \u0441\u0442\u0440\u043e\u043a\u0443, \u0431\u0435\u0437 \u0435\u0434\u0438\u043d\u043e\u0433\u043e
+# \u0443\u0440\u043e\u0432\u043d\u044f \u043e\u0442\u0441\u0442\u0443\u043f\u0430) \u2014 json.dump(indent=1) \u043f\u0435\u0440\u0435\u043f\u0438\u0441\u0430\u043b \u0431\u044b \u041a\u0410\u0416\u0414\u0423\u042e \u0431\u0443\u0434\u0443\u0449\u0443\u044e
+# \u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u044e \u043a\u0430\u043a \u043f\u043e\u043b\u043d\u044b\u0439 \u0440\u0435\u0444\u043b\u043e\u0443 \u0432\u0441\u0435\u0433\u043e \u0444\u0430\u0439\u043b\u0430 (\u0448\u0443\u043c\u043d\u044b\u0439 \u0434\u0438\u0444\u0444 \u0432\u043c\u0435\u0441\u0442\u043e \u0442\u043e\u0447\u0435\u0447\u043d\u043e\u0433\u043e).
+# \u041d\u0430\u0445\u043e\u0434\u0438\u043c \u043c\u0430\u0441\u0441\u0438\u0432 "hypotheses": [...] \u0432 \u0438\u0441\u0445\u043e\u0434\u043d\u043e\u043c \u0442\u0435\u043a\u0441\u0442\u0435 \u0447\u0435\u0440\u0435\u0437 raw_decode
+# (\u0443\u0441\u0442\u043e\u0439\u0447\u0438\u0432\u043e \u043a \u043b\u044e\u0431\u043e\u043c\u0443 \u0441\u043e\u0434\u0435\u0440\u0436\u0438\u043c\u043e\u043c\u0443 \u0441\u0442\u0440\u043e\u043a \u0432\u043d\u0443\u0442\u0440\u0438, \u0432\u043a\u043b\u044e\u0447\u0430\u044f \u043a\u0430\u0432\u044b\u0447\u043a\u0438/\u0441\u043a\u043e\u0431\u043a\u0438) \u0438
+# \u0432\u0441\u0442\u0430\u0432\u043b\u044f\u0435\u043c \u043d\u043e\u0432\u0443\u044e \u0437\u0430\u043f\u0438\u0441\u044c \u043f\u0435\u0440\u0435\u0434 \u0437\u0430\u043a\u0440\u044b\u0432\u0430\u044e\u0449\u0435\u0439 "]", \u043d\u0435 \u0442\u0440\u043e\u0433\u0430\u044f \u043d\u0438 \u0431\u0430\u0439\u0442\u0430 \u043f\u0440\u0435\u0436\u043d\u0435\u0433\u043e
+# \u0441\u043e\u0434\u0435\u0440\u0436\u0438\u043c\u043e\u0433\u043e.
+key_idx = reg_text.index('"hypotheses"')
+colon_idx = reg_text.index(":", key_idx)
+i = colon_idx + 1
+while reg_text[i] in " \t\r\n":
+    i += 1
+start = i  # \u0438\u043d\u0434\u0435\u043a\u0441 "["
+_, end = json.JSONDecoder().raw_decode(reg_text, start)
+close_idx = end - 1  # \u0438\u043d\u0434\u0435\u043a\u0441 \u043f\u0430\u0440\u043d\u043e\u0439 "]"
+inner = reg_text[start + 1:close_idx]
+kept_len = len(inner.rstrip())
+new_entry_text = json.dumps(h, ensure_ascii=False)
+if inner[:kept_len].strip():
+    insertion = ",\n    " + new_entry_text
+else:
+    insertion = "\n    " + new_entry_text + "\n  "
+new_text = reg_text[:start + 1] + inner[:kept_len] + insertion + inner[kept_len:] + reg_text[close_idx:]
+
 d = os.path.dirname(os.environ["E_REG"])
-with tempfile.NamedTemporaryFile(mode="w", dir=d, delete=False) as tmp:
-    json.dump(reg, tmp, indent=1, ensure_ascii=False)
+with tempfile.NamedTemporaryFile(mode="w", dir=d, delete=False, encoding="utf-8") as tmp:
+    tmp.write(new_text)
     tmp_path = tmp.name
 os.replace(tmp_path, os.environ["E_REG"])
 print(json.dumps({"ok": True, "reason": None, "hint": None, "data": {"id": h["id"], "open_now": n_open + 1}}))

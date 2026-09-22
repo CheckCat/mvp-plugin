@@ -40,6 +40,10 @@ cat > "$tmpdir/plug/docs/experiments/registry.json" <<'EOF'
     "threshold": "value >= 1", "ttl_runs": 1, "opened": "2026-09-22" }
 ] }
 EOF
+# Снимок ДО любых add — находка 5d (форматирование реестра при регистрации):
+# сверяем позже, что все последующие add() не переформатировали уже бывшее
+# в файле содержимое, а только дописали новые записи точечно.
+cp "$tmpdir/plug/docs/experiments/registry.json" "$tmpdir/registry-before-add.json"
 # t-pass заодно зонд наследования окружения (находка I1): JOURNALS_DIR
 # приходит от вызывающего experiments.sh обычным bash-наследованием — если
 # это сломается (например, check начнёт чистить env), reason это покажет.
@@ -189,5 +193,73 @@ grep -qF 'PROJECT_ROOT, JOURNALS_DIR' "$repo_root/skills/retro/references/experi
   || { echo "FAIL: experiments-handbook не называет JOURNALS_DIR в контракте env check-скрипта" >&2; fail=1; }
 grep -qF '`JOURNALS_DIR` обязателен' "$repo_root/skills/retro/references/experiments-handbook.md" \
   || { echo "FAIL: experiments-handbook не объясняет обязательность JOURNALS_DIR на Шаге 5" >&2; fail=1; }
+
+# ========== ФИНАЛЬНОЕ РЕВЬЮ ВЕТКИ (находка 5) ==========
+
+# (12) находка 5a — без pipefail `${PIPESTATUS[0]}` (а не общий `$?` пайплайна)
+# обязан ловить ПАДЕНИЕ check-скрипта, даже если тот успел напечатать
+# валидный на вид ok:true JSON перед падением: `... | tail -n1` без pipefail
+# берёт код возврата от tail (почти никогда не падает), поэтому голый `$?`
+# здесь всегда 0 и не видит реального отказа скрипта.
+tmpdir_badexit="$tmpdir/plug-badexit"
+mkdir -p "$tmpdir_badexit/lib" "$tmpdir_badexit/docs/experiments" "$tmpdir_badexit/scripts/experiments" "$tmpdir_badexit/proj/.mvp"
+cp "$repo_root/lib/experiments.sh" "$tmpdir_badexit/lib/"
+cp "$repo_root/lib/state.sh" "$tmpdir_badexit/lib/"
+cat > "$tmpdir_badexit/docs/experiments/registry.json" <<'EOF'
+{ "version": 1, "max_open": 5, "hypotheses": [
+  { "id": "T-badexit", "title": "t", "status": "open", "mode_required": "passive",
+    "check_script": "scripts/experiments/t-badexit.sh",
+    "threshold": "value >= 1", "ttl_runs": 5, "opened": "2026-09-22" }
+] }
+EOF
+cat > "$tmpdir_badexit/scripts/experiments/t-badexit.sh" <<'EOF'
+#!/usr/bin/env bash
+echo '{"ok":true,"reason":null,"hint":null,"data":{"value":99,"verdict":"confirmed"}}'
+exit 1
+EOF
+chmod +x "$tmpdir_badexit/scripts/experiments/t-badexit.sh"
+cd "$tmpdir_badexit/proj"
+echo '{"phase":"done","experiments":"passive"}' > .mvp/state.json
+out="$(bash "$tmpdir_badexit/lib/experiments.sh" check run-badexit | last_line)"
+assert_eq "badexit: check сам не падает" "True" "$(jget "$out" 'd["ok"]')"
+if [ -f .mvp/experiments/results.jsonl ] && grep -q '"T-badexit"' .mvp/experiments/results.jsonl; then
+  echo "FAIL: упавший (exit!=0) check-скрипт всё равно записан в results.jsonl несмотря на валидный на вид ok:true JSON — PIPESTATUS не ловит" >&2
+  fail=1
+fi
+assert_eq "badexit: summary отмечает отказ, не recorded" "True" \
+  "$(jget "$out" '"not-ok" in json.dumps(d["data"]["checked"])')"
+cd "$tmpdir/proj"
+
+# (13) находка 5c — add с синтаксически невалидным JSON: обе ветки этого кода
+# есть (json-parse и missing-field), тестом раньше не покрыта ни одна.
+out="$(bash "$tmpdir/plug/lib/experiments.sh" add --json '{this is not json' | last_line)" || true
+assert_eq "add: синтаксически невалидный JSON — ok" "False" "$(jget "$out" 'd["ok"]')"
+assert_eq "add: невалидный JSON — reason называет причину" "True" "$(jget "$out" '"not valid JSON" in (d["reason"] or "")')"
+
+# (14) находка 5c — add с валидным JSON, но без обязательного поля (`opened`).
+out="$(bash "$tmpdir/plug/lib/experiments.sh" add --json '{"id":"T-nofield","title":"t","status":"open","mode_required":"passive","check_script":"s.sh","threshold":"value >= 1","ttl_runs":5}' | last_line)" || true
+assert_eq "add: отсутствует обязательное поле — ok" "False" "$(jget "$out" 'd["ok"]')"
+assert_eq "add: отсутствует поле — reason называет его" "True" "$(jget "$out" '"opened" in (d["reason"] or "")')"
+
+# (15) находка 5d — регистрация не переписывает уже бывшее в файле
+# содержимое (indent=1 рефлоу всего файла), только дописывает новую запись
+# точечно. К этому моменту через фикстуру уже прошли несколько add() (сценарии
+# 7/8: T-new, T-fill5/6/7) — если бы одна из них перезаписала весь файл под
+# json.dump(indent=1), исходное форматирование T-pass/T-greedy/T-missing/
+# T-verdict уже было бы потеряно.
+REG_BEFORE="$tmpdir/registry-before-add.json" REG_AFTER="$tmpdir/plug/docs/experiments/registry.json" python3 -c '
+import os
+orig = open(os.environ["REG_BEFORE"], encoding="utf-8").read()
+new = open(os.environ["REG_AFTER"], encoding="utf-8").read()
+tail = "\n] }\n"
+assert orig.endswith(tail), "фикстура теста не оканчивается ожидаемым хвостом"
+head = orig[: -len(tail)]
+if not new.startswith(head):
+    idx = next((i for i in range(min(len(head), len(new))) if head[i] != new[i]), min(len(head), len(new)))
+    raise SystemExit("форматирование существующих записей реестра изменилось при add (первое расхождение на байте %d)" % idx)
+import re
+if re.search(r"\n \S", new):
+    raise SystemExit("похоже на json.dump(indent=1) — в файле строка с отступом в один пробел")
+' || { echo "FAIL: add() переформатировал существующее содержимое реестра вместо точечной вставки" >&2; fail=1; }
 
 exit $fail
