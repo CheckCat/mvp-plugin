@@ -34,7 +34,10 @@ cat > "$tmpdir/plug/docs/experiments/registry.json" <<'EOF'
     "threshold": "value >= 1", "ttl_runs": 9, "opened": "2026-09-22" },
   { "id": "T-missing", "title": "t", "status": "open", "mode_required": "passive",
     "check_script": "scripts/experiments/no-such.sh",
-    "threshold": "value >= 1", "ttl_runs": 9, "opened": "2026-09-22" }
+    "threshold": "value >= 1", "ttl_runs": 9, "opened": "2026-09-22" },
+  { "id": "T-verdict", "title": "t", "status": "open", "mode_required": "passive",
+    "check_script": "scripts/experiments/t-verdict.sh",
+    "threshold": "value >= 1", "ttl_runs": 1, "opened": "2026-09-22" }
 ] }
 EOF
 cat > "$tmpdir/plug/scripts/experiments/t-pass.sh" <<'EOF'
@@ -44,6 +47,10 @@ EOF
 cat > "$tmpdir/plug/scripts/experiments/t-greedy.sh" <<'EOF'
 #!/usr/bin/env bash
 echo '{"ok":true,"reason":null,"hint":null,"data":{"value":1,"verdict":"confirmed"}}'
+EOF
+cat > "$tmpdir/plug/scripts/experiments/t-verdict.sh" <<'EOF'
+#!/usr/bin/env bash
+echo '{"ok":true,"reason":null,"hint":null,"data":{"value":7,"verdict":"refuted"}}'
 EOF
 chmod +x "$tmpdir/plug/scripts/experiments/"*.sh
 
@@ -76,21 +83,34 @@ echo '{"phase":"done"}' > .mvp/state.json
 out="$(bash "$tmpdir/plug/lib/experiments.sh" check run-3 | last_line)"
 assert_eq "дефолт greedy" "2" "$(grep -c '"T-greedy"' .mvp/experiments/results.jsonl)"
 
-# (5) list: T-pass прогоняется на run-1/run-2/run-3 — перед каждым прогоном
-# runs_seen (0, затем 1, затем 2) ещё < ttl_runs=3, гипотеза не expired.
-# После третьего прогона runs_seen=3, и 3 >= ttl_runs=3 → expired_candidate.
+# (5) list: T-pass (без вердикта — check-скрипт всегда отдаёт verdict:null) прогоняется
+# на run-1/run-2/run-3 — перед каждым прогоном runs_seen (0, затем 1, затем 2) ещё
+# < ttl_runs=3, гипотеза не expired. После третьего прогона runs_seen=3, verdict_seen
+# отсутствует, и 3 >= ttl_runs=3 → expired_candidate (спека: «>=ttl_runs БЕЗ вердикта»).
+# T-verdict истекает ttl (ttl_runs=1) уже после первого прогона, но её check-скрипт
+# всегда отдаёт непустой verdict — по той же спеке она обязана НЕ стать expired_candidate,
+# иначе вывод, ради сохранения которого механизм существует, был бы потерян.
 out="$(bash "$tmpdir/plug/lib/experiments.sh" list | last_line)"
 assert_eq "list ok" "True" "$(jget "$out" 'd["ok"]')"
 assert_eq "runs_seen из results" "3" "$(jget "$out" '[h for h in d["data"]["hypotheses"] if h["id"]=="T-pass"][0]["runs_seen"]')"
-assert_eq "ttl исчерпан → expired-candidate" "True" "$(jget "$out" '[h for h in d["data"]["hypotheses"] if h["id"]=="T-pass"][0]["expired_candidate"]')"
+assert_eq "T-pass: verdict_seen отсутствует" "None" "$(jget "$out" '[h for h in d["data"]["hypotheses"] if h["id"]=="T-pass"][0]["verdict_seen"]')"
+assert_eq "ttl исчерпан без вердикта → expired-candidate" "True" "$(jget "$out" '[h for h in d["data"]["hypotheses"] if h["id"]=="T-pass"][0]["expired_candidate"]')"
+assert_eq "T-verdict: runs_seen" "3" "$(jget "$out" '[h for h in d["data"]["hypotheses"] if h["id"]=="T-verdict"][0]["runs_seen"]')"
+assert_eq "T-verdict: verdict_seen непустой" "refuted" "$(jget "$out" '[h for h in d["data"]["hypotheses"] if h["id"]=="T-verdict"][0]["verdict_seen"]')"
+assert_eq "ttl исчерпан, но есть вердикт → НЕ expired-candidate" "False" "$(jget "$out" '[h for h in d["data"]["hypotheses"] if h["id"]=="T-verdict"][0]["expired_candidate"]')"
 
-# (6) на run-4 T-pass уже expired_candidate (см. (5)) — check её пропускает,
-# число записей T-pass в results.jsonl не растёт.
+# (6) на run-4: T-pass уже expired_candidate (см. (5), без вердикта) — check её пропускает,
+# число записей T-pass в results.jsonl не растёт. T-verdict, наоборот, исчерпала ttl,
+# но имеет вердикт — по спеке check обязан продолжать её прогонять, а не молчаливо
+# считать expired только потому, что ttl вышел.
 n_before="$(grep -c '"T-pass"' .mvp/experiments/results.jsonl)"
+n_verdict_before="$(grep -c '"T-verdict"' .mvp/experiments/results.jsonl)"
 bash "$tmpdir/plug/lib/experiments.sh" check run-4 >/dev/null
-assert_eq "expired не прогоняется" "$n_before" "$(grep -c '"T-pass"' .mvp/experiments/results.jsonl)"
+assert_eq "expired без вердикта не прогоняется" "$n_before" "$(grep -c '"T-pass"' .mvp/experiments/results.jsonl)"
+n_verdict_after="$(grep -c '"T-verdict"' .mvp/experiments/results.jsonl)"
+[ "$n_verdict_after" -gt "$n_verdict_before" ] || { echo "FAIL: гипотеза с вердиктом должна продолжать проверяться после исчерпания ttl (было $n_verdict_before, стало $n_verdict_after)" >&2; fail=1; }
 
-# (7) add: без числа в threshold — отказ; с числом — входит; шестая открытая — отказ
+# (7) add: без числа в threshold — отказ; с числом — входит; сверх cap (max_open=5) — отказ
 out="$(bash "$tmpdir/plug/lib/experiments.sh" add --json '{"id":"T-new","title":"t","status":"open","mode_required":"passive","check_script":"scripts/experiments/x.sh","threshold":"без числа","ttl_runs":5,"opened":"2026-09-22"}' | last_line)" || true
 assert_eq "add без числа в threshold" "False" "$(jget "$out" 'd["ok"]')"
 out="$(bash "$tmpdir/plug/lib/experiments.sh" add --json '{"id":"T-new","title":"t","status":"open","mode_required":"passive","check_script":"scripts/experiments/x.sh","threshold":"value >= 3","ttl_runs":5,"opened":"2026-09-22"}' | last_line)"
@@ -100,9 +120,54 @@ for i in 5 6 7; do
 done
 out="$(bash "$tmpdir/plug/lib/experiments.sh" list | last_line)"
 n_open="$(jget "$out" 'len([h for h in d["data"]["hypotheses"] if h["status"] in ("open","needs-optin")])')"
-[ "$n_open" -le 5 ] || { echo "FAIL: max_open=5 нарушен, открытых $n_open" >&2; fail=1; }
+assert_eq "max_open=5 соблюдён ровно" "5" "$n_open"
 # (8) дубликат id — отказ
 out="$(bash "$tmpdir/plug/lib/experiments.sh" add --json '{"id":"T-new","title":"t2","status":"open","mode_required":"passive","check_script":"s.sh","threshold":"value >= 1","ttl_runs":5,"opened":"2026-09-22"}' | last_line)" || true
 assert_eq "дубликат id" "False" "$(jget "$out" 'd["ok"]')"
+
+# (9) битый registry.json (невалидный JSON) — list/add/check обязаны ответить контрактным
+# {"ok":false,...} и exit 1, а не упасть traceback'ом без единой строки на stdout.
+tmpdir_bad="$tmpdir/plug-badjson"
+mkdir -p "$tmpdir_bad/lib" "$tmpdir_bad/docs/experiments"
+cp "$repo_root/lib/experiments.sh" "$tmpdir_bad/lib/"
+cp "$repo_root/lib/state.sh" "$tmpdir_bad/lib/"
+printf '{ this is not json' > "$tmpdir_bad/docs/experiments/registry.json"
+
+out="$(bash "$tmpdir_bad/lib/experiments.sh" list)"; ec=$?
+last="$(printf '%s' "$out" | last_line)"
+assert_eq "битый registry: list exit code" "1" "$ec"
+assert_eq "битый registry: list ok" "False" "$(jget "$last" 'd["ok"]')"
+
+out="$(bash "$tmpdir_bad/lib/experiments.sh" add --json '{"id":"X","title":"t","status":"open","mode_required":"passive","check_script":"s.sh","threshold":"value >= 1","ttl_runs":5,"opened":"2026-09-22"}')"; ec=$?
+last="$(printf '%s' "$out" | last_line)"
+assert_eq "битый registry: add exit code" "1" "$ec"
+assert_eq "битый registry: add ok" "False" "$(jget "$last" 'd["ok"]')"
+
+out="$(bash "$tmpdir_bad/lib/experiments.sh" check run-x)"; ec=$?
+last="$(printf '%s' "$out" | last_line)"
+assert_eq "битый registry: check exit code" "1" "$ec"
+assert_eq "битый registry: check ok" "False" "$(jget "$last" 'd["ok"]')"
+
+# (10) отсутствующий registry.json — то же самое: контрактный ok:false, exit 1, без traceback.
+tmpdir_missing="$tmpdir/plug-missing"
+mkdir -p "$tmpdir_missing/lib"
+cp "$repo_root/lib/experiments.sh" "$tmpdir_missing/lib/"
+cp "$repo_root/lib/state.sh" "$tmpdir_missing/lib/"
+# docs/experiments/registry.json намеренно не создаём
+
+out="$(bash "$tmpdir_missing/lib/experiments.sh" list)"; ec=$?
+last="$(printf '%s' "$out" | last_line)"
+assert_eq "отсутствующий registry: list exit code" "1" "$ec"
+assert_eq "отсутствующий registry: list ok" "False" "$(jget "$last" 'd["ok"]')"
+
+out="$(bash "$tmpdir_missing/lib/experiments.sh" add --json '{"id":"X","title":"t","status":"open","mode_required":"passive","check_script":"s.sh","threshold":"value >= 1","ttl_runs":5,"opened":"2026-09-22"}')"; ec=$?
+last="$(printf '%s' "$out" | last_line)"
+assert_eq "отсутствующий registry: add exit code" "1" "$ec"
+assert_eq "отсутствующий registry: add ok" "False" "$(jget "$last" 'd["ok"]')"
+
+out="$(bash "$tmpdir_missing/lib/experiments.sh" check run-x)"; ec=$?
+last="$(printf '%s' "$out" | last_line)"
+assert_eq "отсутствующий registry: check exit code" "1" "$ec"
+assert_eq "отсутствующий registry: check ok" "False" "$(jget "$last" 'd["ok"]')"
 
 exit $fail

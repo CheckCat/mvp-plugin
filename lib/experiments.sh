@@ -37,23 +37,41 @@ print(m if m in ("off", "passive", "greedy") else "greedy")
 case "$cmd" in
   list)
     E_REG="$REGISTRY" E_RES="$RESULTS" python3 <<'PY'
-import json, os
-reg = json.load(open(os.environ["E_REG"]))
+import json, os, sys
+E_REG = os.environ["E_REG"]
+try:
+    reg = json.load(open(E_REG))
+except FileNotFoundError:
+    print(json.dumps({"ok": False, "reason": "registry not found: %s" % E_REG,
+                      "hint": "create docs/experiments/registry.json (see plan \u00a77) or fix PLUGIN_ROOT", "data": None}))
+    sys.exit(1)
+except json.JSONDecodeError as e:
+    print(json.dumps({"ok": False, "reason": "registry is not valid JSON: %s" % e,
+                      "hint": "fix docs/experiments/registry.json by hand \u2014 the reader does not auto-repair it", "data": None}))
+    sys.exit(1)
 seen = {}
+verdicts = {}
 try:
     for line in open(os.environ["E_RES"]):
         try:
             r = json.loads(line)
         except ValueError:
             continue
-        seen.setdefault(r.get("hypothesis"), set()).add(r.get("run_label"))
+        hid = r.get("hypothesis")
+        seen.setdefault(hid, set()).add(r.get("run_label"))
+        v = r.get("verdict")
+        if v:
+            verdicts[hid] = v
 except FileNotFoundError:
     pass
 out = []
 for h in reg.get("hypotheses", []):
     n = len(seen.get(h["id"], set()))
-    out.append({**h, "runs_seen": n,
-                "expired_candidate": h.get("status") in ("open", "needs-optin") and n >= h.get("ttl_runs", 10)})
+    verdict_seen = verdicts.get(h["id"])
+    expired = (h.get("status") in ("open", "needs-optin")
+               and n >= h.get("ttl_runs", 10)
+               and verdict_seen is None)
+    out.append({**h, "runs_seen": n, "verdict_seen": verdict_seen, "expired_candidate": expired})
 print(json.dumps({"ok": True, "reason": None, "hint": None,
                   "data": {"max_open": reg.get("max_open", 5), "hypotheses": out}}))
 PY
@@ -68,6 +86,10 @@ PY
     fi
     # Список гипотез к прогону — через list (там же вычислен expired_candidate).
     listing="$(bash "$here/experiments.sh" list | tail -n 1)"
+    if ! L="$listing" python3 -c 'import json,os,sys; sys.exit(0 if json.loads(os.environ["L"]).get("ok") else 1)' 2>/dev/null; then
+      printf '%s\n' "$listing"
+      exit 1
+    fi
     summary="[]"
     mkdir -p .mvp/experiments
     while IFS= read -r row; do
@@ -127,7 +149,14 @@ if not re.search(r"\d", str(h["threshold"])):
     print(json.dumps({"ok": False, "reason": "threshold has no number — a hypothesis without a decidable threshold is a metrics dump, not an experiment", "hint": "state the exact numeric rule that confirms/refutes", "data": None})); sys.exit(1)
 if h["status"] not in ("open", "needs-optin"):
     print(json.dumps({"ok": False, "reason": "new hypothesis must start open or needs-optin", "hint": None, "data": None})); sys.exit(1)
-reg = json.load(open(os.environ["E_REG"]))
+try:
+    reg = json.load(open(os.environ["E_REG"]))
+except FileNotFoundError:
+    print(json.dumps({"ok": False, "reason": "registry not found: %s" % os.environ["E_REG"],
+                      "hint": "create docs/experiments/registry.json (see plan \u00a77) or fix PLUGIN_ROOT", "data": None})); sys.exit(1)
+except json.JSONDecodeError as e:
+    print(json.dumps({"ok": False, "reason": "registry is not valid JSON: %s" % e,
+                      "hint": "fix docs/experiments/registry.json by hand \u2014 the reader does not auto-repair it", "data": None})); sys.exit(1)
 if any(x["id"] == h["id"] for x in reg["hypotheses"]):
     print(json.dumps({"ok": False, "reason": "duplicate id: %s" % h["id"], "hint": None, "data": None})); sys.exit(1)
 n_open = sum(1 for x in reg["hypotheses"] if x["status"] in ("open", "needs-optin"))
