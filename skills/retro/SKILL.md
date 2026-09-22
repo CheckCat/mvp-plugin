@@ -43,7 +43,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh get phase
 ${CLAUDE_PLUGIN_ROOT}/lib/experiments.sh check <stamp>
 ```
 
-Сводку `checked` — в observation-файл. `list` покажет `expired_candidate` и терминальные статусы: их вердикты перенеси в observation ПЛАГИНА и удали строку из registry.json руками — порядок в [справочнике](references/experiments-handbook.md).
+Сводку `checked` — в observation-файл. `list` покажет `expired_candidate` и терминальные статусы: скажи оператору перенести вердикт в observation плагина и удалить строку из registry.json (сам не трогай) — порядок в [справочнике](references/experiments-handbook.md).
 
 ## Шаг 6 — что дальше руками
 
