@@ -40,9 +40,12 @@ cat > "$tmpdir/plug/docs/experiments/registry.json" <<'EOF'
     "threshold": "value >= 1", "ttl_runs": 1, "opened": "2026-09-22" }
 ] }
 EOF
+# t-pass заодно зонд наследования окружения (находка I1): JOURNALS_DIR
+# приходит от вызывающего experiments.sh обычным bash-наследованием — если
+# это сломается (например, check начнёт чистить env), reason это покажет.
 cat > "$tmpdir/plug/scripts/experiments/t-pass.sh" <<'EOF'
 #!/usr/bin/env bash
-echo '{"ok":true,"reason":null,"hint":null,"data":{"value":42,"verdict":null}}'
+python3 -c 'import json,os; print(json.dumps({"ok":True,"reason":"probe: journals=%s" % os.environ.get("JOURNALS_DIR","ABSENT"),"hint":None,"data":{"value":42,"verdict":None}}))'
 EOF
 cat > "$tmpdir/plug/scripts/experiments/t-greedy.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -64,11 +67,17 @@ out="$(bash "$tmpdir/plug/lib/experiments.sh" check run-1 | last_line)"
 assert_eq "off: ok" "True" "$(jget "$out" 'd["ok"]')"
 [ -f .mvp/experiments/results.jsonl ] && { echo "FAIL: off-режим записал results" >&2; fail=1; }
 
-# (2) passive: passive-гипотеза прогнана, greedy — пропущена, missing — залогирована, не упала
+# (2) passive: passive-гипотеза прогнана, greedy — пропущена, missing — залогирована, не упала.
+# JOURNALS_DIR передан снаружи (как это делает retro Шаг 5) — обязан дойти
+# до check-скрипта через окружение; reason скрипта — доехать до results.jsonl
+# (находка I1: без reason голодание гипотезы неотличимо от данных).
 echo '{"phase":"done","experiments":"passive"}' > .mvp/state.json
-out="$(bash "$tmpdir/plug/lib/experiments.sh" check run-1 | last_line)"
+out="$(JOURNALS_DIR=/tmp/j-probe bash "$tmpdir/plug/lib/experiments.sh" check run-1 | last_line)"
 assert_eq "passive: ok" "True" "$(jget "$out" 'd["ok"]')"
 assert_eq "passive: T-pass записан" "1" "$(grep -c '"T-pass"' .mvp/experiments/results.jsonl)"
+rec="$(grep '"T-pass"' .mvp/experiments/results.jsonl | tail -n 1)"
+assert_eq "JOURNALS_DIR наследуется check-скриптом" "True" "$(jget "$rec" '"journals=/tmp/j-probe" in (d.get("reason") or "")')"
+assert_eq "reason пишется в results.jsonl" "True" "$(jget "$rec" '"reason" in d')"
 assert_eq "passive: T-greedy пропущен" "0" "$(grep -c '"T-greedy"' .mvp/experiments/results.jsonl)"
 assert_eq "passive: missing-скрипт как skipped, не crash" "True" "$(jget "$out" '"script missing" in json.dumps(d["data"])')"
 
@@ -169,5 +178,16 @@ out="$(bash "$tmpdir_missing/lib/experiments.sh" check run-x)"; ec=$?
 last="$(printf '%s' "$out" | last_line)"
 assert_eq "отсутствующий registry: check exit code" "1" "$ec"
 assert_eq "отсутствующий registry: check ok" "False" "$(jget "$last" 'd["ok"]')"
+
+# (11) проводка JOURNALS_DIR (находка I1): Шаг 5 retro обязан передавать
+# каталог журналов, справочник — описывать переменную в контракте env и
+# объяснять цену её отсутствия (голодание гипотез).
+grep -qF 'JOURNALS_DIR=<каталог agent-*.jsonl из Шага 3> ${CLAUDE_PLUGIN_ROOT}/lib/experiments.sh check <stamp>' \
+  "$repo_root/skills/retro/SKILL.md" \
+  || { echo "FAIL: retro/SKILL.md Шаг 5 не передаёт JOURNALS_DIR — H2/H3 голодают и закроются «недоказуемо»" >&2; fail=1; }
+grep -qF 'PROJECT_ROOT, JOURNALS_DIR' "$repo_root/skills/retro/references/experiments-handbook.md" \
+  || { echo "FAIL: experiments-handbook не называет JOURNALS_DIR в контракте env check-скрипта" >&2; fail=1; }
+grep -qF '`JOURNALS_DIR` обязателен' "$repo_root/skills/retro/references/experiments-handbook.md" \
+  || { echo "FAIL: experiments-handbook не объясняет обязательность JOURNALS_DIR на Шаге 5" >&2; fail=1; }
 
 exit $fail

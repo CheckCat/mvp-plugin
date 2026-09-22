@@ -111,8 +111,13 @@ except Exception:
     ok = False; data = {}
 if not ok:
     print("skip"); raise SystemExit
+# reason — аддитивное поле (финальное ревью, находка I1): без него запись
+# «value:null, verdict:null» неотличима от данных; подряд идущие «журналы
+# недоступны» — признак того, что retro не передаёт JOURNALS_DIR, и гипотеза
+# голодает, а не проверяется. Старые записи без поля остаются читаемыми.
 rec = {"hypothesis": os.environ["I"], "run_label": os.environ["L"],
        "value": data.get("value"), "verdict": data.get("verdict"),
+       "reason": r.get("reason"),
        "ts": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")}
 with open(os.environ["RES"], "a") as fh:
     fh.write(json.dumps(rec) + "\n")

@@ -27,7 +27,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh get phase
 
 Четыре входа (зачем каждый — в справочнике): `ledger.md`, `decisions.log`, `blockers.md`, **транскрипт прогона** (`journal.jsonl`, `agent-*.jsonl`).
 
-**`blockers.md`** — приоритетный вход: дефекты, которых не ловит ни один гейт (почему — в справочнике); каждый незакрытый — кандидат в правку или `add-task` (транскрипт — тоже вход, см. справочник).
+**`blockers.md`** — приоритетный вход: дефекты, которых не ловит ни один гейт (почему — в справочнике); каждый незакрытый — кандидат в правку или `add-task`.
 
 Кандидат = вербатим-цитата (не перефраз) + источник + цель. Для дефекта кода цель — `file:line`.
 
@@ -40,7 +40,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/state.sh get phase
 ## Шаг 5 — реестр гипотез
 
 ```
-${CLAUDE_PLUGIN_ROOT}/lib/experiments.sh check <stamp>
+JOURNALS_DIR=<каталог agent-*.jsonl из Шага 3> ${CLAUDE_PLUGIN_ROOT}/lib/experiments.sh check <stamp>
 ```
 
 Сводку `checked` — в observation-файл. `list` покажет `expired_candidate` и терминальные статусы: скажи оператору перенести вердикт в observation плагина и удалить строку из registry.json (сам не трогай) — порядок в [справочнике](references/experiments-handbook.md).
