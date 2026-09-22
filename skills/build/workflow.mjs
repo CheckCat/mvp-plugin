@@ -1605,7 +1605,7 @@ function b64Payload(s) {
 //     where quoted prose was re-authored into a nonexistent flag.
 // The chain's LAST json line is now the ledger envelope, so the commit sha
 // is read from there (plan-io echoes it back for exactly this reason).
-async function finalize(id, boundary, tokensDelta, dispatches, concerns, phaseTitle) {
+async function finalize(id, boundary, tokensDelta, dispatches, concerns, phaseTitle, arm, segments) {
   // Per-task scratch artifacts get their own directory, like briefs/, reports/
   // and review/: a 55-task run otherwise buries plan.json, ledger.md and
   // invariants.md under 55 commit-msg-*.txt files in the same listing.
@@ -1622,8 +1622,13 @@ async function finalize(id, boundary, tokensDelta, dispatches, concerns, phaseTi
   // fixture) must still be committed. One quoted path — explicit, never
   // `git add -A`; finalize.sh's build-task scope appends `.mvp`
   // itself, which is where the report/brief/state files live.
+  // arm/segments (спека §9): additive-хвост на `complete`, present only when
+  // the CAP-рукав actually ran this task (arm != null — greedy + a real
+  // capped_role). A control-arm or ineligible task passes arm=null here and
+  // gets no extra flags at all — same command line as before this task.
+  const armArg = arm != null ? ` --arm ${arm} --segments ${segments}` : '';
   const cmd = [
-    `node "${lib}/plan-io.mjs" complete "${id}" --tokens ${tokensDelta} --dispatches ${dispatches} --write-msg "${msgPath}"`,
+    `node "${lib}/plan-io.mjs" complete "${id}" --tokens ${tokensDelta} --dispatches ${dispatches} --write-msg "${msgPath}"${armArg}`,
     `bash "${lib}/finalize.sh" build-task "${msgPath}" --files "${boundary}"`,
     `node "${lib}/plan-io.mjs" ledger --task "${id}" --sha HEAD${concernArg}`,
   ].join(' && ');
@@ -1727,7 +1732,7 @@ async function park(id, boundary, why) {
 // hand which task had been in flight.
 let inFlightTask = null;
 
-async function runOneTask(adv) {
+async function runOneTask(adv, tasksDone) {
   const id = adv.data.task_id;
   const briefPath = adv.data.brief_path;
   const boundary = adv.data.boundary;
@@ -1737,6 +1742,14 @@ async function runOneTask(adv) {
   const declaredFiles = Array.isArray(adv.data.files) ? adv.data.files : [];
   const filesCsv = declaredFiles.join(',');
   const reportPath = `.mvp/reports/task-${id}.md`;
+
+  // CAP-рукав (спека §9): жив только в greedy, только при существующей
+  // capped-роли, и только на чётном срезе исполнения — нечётные задачи
+  // прогона остаются контролем. ЗАКОН: рукав меняет параметры УЖЕ
+  // исполняемых диспатчей, никогда не добавляя ни прогона, ни задачи.
+  const armEligible = adv.data.experiments === 'greedy' && !!adv.data.capped_role;
+  const armActive = armEligible && (tasksDone % 2 === 0);
+  const arm = armEligible ? (armActive ? 'cap30' : 'control') : null;
 
   // Token-delta measurement starts here, at the very top of the task
   // iteration — BEFORE the implementer dispatch (fix round item 4: it
@@ -1758,18 +1771,55 @@ async function runOneTask(adv) {
 
   const initialModel = modelClass === 'novel-design' ? 'opus' : 'sonnet';
   const implPrompt = implementerPrompt({ briefPath, boundary, taskId: id, reportPath });
-  const implText = await dispatchAgentText(implPrompt, {
-    model: initialModel,
-    phase: 'Implement',
-    label: `implementer-${id}`,
-    agentType: role,
-  });
-  if (implText == null) {
-    return park(id, boundary, 'implementer dispatch failed: both agentType and general-purpose fallback returned no result');
+
+  let implText;
+  let segments = 1;
+  if (armActive) {
+    // Capped-role path: agentText directly, NOT dispatchAgentText — its
+    // generic-purpose fallback would re-run the whole task without the
+    // _common.md contract, discarding the discriminator below entirely.
+    implText = await agentText(implPrompt, {
+      model: initialModel, phase: 'Implement', label: `implementer-${id}`, agentType: adv.data.capped_role,
+    });
+    // Дискриминатор «обрыв ≠ отказ»: null без финального сообщения + грязное
+    // дерево = потолок ходов; handoff.sh сам отличает (чистое дерево → ok:false
+    // → обычный park). Цена промаха — выброс сегмента; допуск до 52% промахов
+    // (final-verdict), ветке достаточно быть правой в двух случаях из трёх.
+    const CAP_SEGMENTS = 4;
+    while (implText == null && segments < CAP_SEGMENTS) {
+      const ho = await relay(`bash "${lib}/handoff.sh" "${id}" ${segments + 1}`, {
+        phase: 'Implement', label: `handoff-${id}-${segments + 1}`, retryable: false,
+      });
+      if (!ho.ok) break; // чистое дерево — не обрыв: вниз, к обычному park по null
+      segments += 1;
+      implText = await agentText(
+        `${implPrompt}\n\nПеред началом прочитай ${ho.data.path} — предыдущий агент этой задачи оборван потолком ходов, там что уже сделано. Продолжай с этого места, не переделывай сделанное.`,
+        { model: initialModel, phase: 'Implement', label: `implementer-${id}-seg${segments}`, agentType: adv.data.capped_role },
+      );
+    }
+    if (implText == null) {
+      return park(id, boundary, `implementer (cap arm) returned no text after ${segments} segment(s) — either the cap discriminator saw a clean tree (ordinary failure) or ${CAP_SEGMENTS} segments were exhausted`);
+    }
+  } else {
+    implText = await dispatchAgentText(implPrompt, { model: initialModel, phase: 'Implement', label: `implementer-${id}`, agentType: role });
+    if (implText == null) {
+      return park(id, boundary, 'implementer dispatch failed: both agentType and general-purpose fallback returned no result');
+    }
+    if (agentTypeFallbacks.has(role)) {
+      return park(id, boundary,
+        `agentType "${role}" did not dispatch — this task ran on general-purpose, WITHOUT the `
+        + '_common.md contract (boundary rules, report format, blocker protocol) that mvp:bootstrap assembled for it. '
+        + `Check whether .claude/agents/${role}.md exists. If it DOES: agents register at session start, so a bootstrap `
+        + 'run in this same session yields files that are not dispatchable until the next one — restart the session and '
+        + 're-run this task. If it does NOT: mvp:bootstrap never assembled that role, and no restart will help — fix that first.');
+    }
   }
 
   // Halt on the FIRST fallback, before the ladders spend anything on work that
-  // was produced without the role's contract.
+  // was produced without the role's contract. Only reachable via the ELSE
+  // (non-CAP-arm) branch above — the capped path dispatches `adv.data.capped_role`
+  // directly through agentText, never through dispatchAgentText, so it never
+  // populates agentTypeFallbacks for `role` in the first place.
   //
   // This used to ship as a per-task concern and let the run continue. Measured
   // (trellis, 2026-09): three tasks ran on general-purpose that way — no
@@ -1782,14 +1832,6 @@ async function runOneTask(adv) {
   // The cost of halting is one session restart. The cost of continuing is
   // every remaining task of the plan built without its role contract, which
   // is why this is a halt and not a louder concern.
-  if (agentTypeFallbacks.has(role)) {
-    return park(id, boundary,
-      `agentType "${role}" did not dispatch — this task ran on general-purpose, WITHOUT the `
-      + '_common.md contract (boundary rules, report format, blocker protocol) that mvp:bootstrap assembled for it. '
-      + `Check whether .claude/agents/${role}.md exists. If it DOES: agents register at session start, so a bootstrap `
-      + 'run in this same session yields files that are not dispatchable until the next one — restart the session and '
-      + 're-run this task. If it does NOT: mvp:bootstrap never assembled that role, and no restart will help — fix that first.');
-  }
 
   const concerns = [];
   const status = parseStatus(implText);
@@ -1832,7 +1874,7 @@ async function runOneTask(adv) {
     );
   }
 
-  const sha = await finalize(id, boundary, tokensDelta, dispatches, ctx.concerns, 'Finalize');
+  const sha = await finalize(id, boundary, tokensDelta, dispatches, ctx.concerns, 'Finalize', arm, armActive ? segments : 1);
 
   // concerns still travel in the return value for the SKILL's run summary,
   // but they are no longer the SKILL's responsibility to persist — finalize()
@@ -1983,7 +2025,7 @@ try {
       return withRunLabels(haltPayload);
     }
 
-    const outcome = await runOneTask(adv);
+    const outcome = await runOneTask(adv, tasksDone);
     if (outcome.halt) return withRunLabels(outcome); // park() propagates its stop-and-ask halt directly
 
     results.push({ task_id: outcome.task_id, sha: outcome.sha, tokens_delta: outcome.tokens_delta, concerns: outcome.concerns });

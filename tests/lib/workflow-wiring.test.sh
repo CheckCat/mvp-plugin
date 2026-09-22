@@ -50,8 +50,11 @@ need_count_code() {
   fi
 }
 
-# Валидатор — единственная точка диспатча, grep -q достаточно.
-need "agentType: 'mvp-validator'" "валидатор без узкой роли"
+# Валидатор — единственная точка диспатча. need_code (не голый need — task 8
+# fix), чтобы голый комментарий-приманка с тем же текстом не держал ассерт
+# зелёным при удалении настоящего вызова — та же дыра fix round 2 закрыл для
+# соседних ассертов этого файла, но этот остался старой формой до сих пор.
+need_code "agentType: 'mvp-validator'" "валидатор без узкой роли"
 
 # agentType: 'mvp-relay' обязан стоять в ОБЕИХ точках диспатча релея:
 # relayLine() (единственный вызов agent()) и relay()/attempt() (первая,
@@ -99,6 +102,13 @@ elif [ "$line_allabstain" -ge "$line_blind" ]; then
   echo "FAIL: workflow.mjs: ветка all-abstain (live.length === 0) должна идти ДО вычисления blind-голосов (const blind = live.filter...) — иначе «все воздержались» тихо станет «ревью прошло чисто»" >&2
   fail=1
 fi
+
+# CAP-рукав (task 8, спека §9): payload plan-io next читается, потолок
+# сегментов есть, срез — чётный (внутрипрогонный контроль на нечётных).
+need "capped_role" "рукав не читает payload plan-io"
+need "CAP_SEGMENTS" "нет лимита сегментов"
+need "tasksDone % 2" "нет чётного среза (внутрипрогонный контроль)"
+grep -c "dispatchCount" "$wf" >/dev/null # рукав не должен добавлять новых точек инкремента сверх agentText/relay
 
 # Sanity-parse (та же команда, что в Global Constraints)
 node -e "const src=require('fs').readFileSync('$wf','utf8').replace(/^export const meta[\s\S]*?^}/m,''); new (Object.getPrototypeOf(async function(){}).constructor)('agent','parallel','pipeline','log','phase','args','budget','workflow', src)" || { echo "FAIL: sanity-parse" >&2; fail=1; }
