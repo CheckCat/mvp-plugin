@@ -234,6 +234,23 @@ assert_eq "h2 промежуточная медиана: значение" "2000
 assert_eq "h2 промежуточная медиана (16000 < 20000 <= 24000): нет вердикта" "None" "$(jd "$out" 'd["data"]["verdict"]')"
 assert_eq "h2 промежуточная медиана: reason не укладывается ни в одно правило" "True" "$(jd "$out" '"не укладываются" in d["reason"]')"
 
+# --- H2 (второй проход финального ревью, мелкая находка 1): refuted выносится
+# по превышению медианы НЕЗАВИСИМО от generic в лестнице — generic блокирует
+# только confirmed. Текст порога в registry.json раньше говорил «есть generic
+# -> вердикта нет», числа этой ветки сторожит drift-тест, а саму логику — этот
+# ассерт: j5 (медиана 30000 > 24000) плюс generic-журнал — всё равно refuted.
+mkdir -p j5g
+cp j5/agent-r1.meta.json j5/agent-r1.jsonl j5/agent-r2.meta.json j5/agent-r2.jsonl j5/agent-r3.meta.json j5/agent-r3.jsonl j5g/
+cat > j5g/agent-g1.meta.json <<'EOF'
+{"agentType":"workflow-subagent"}
+EOF
+cat > j5g/agent-g1.jsonl <<'EOF'
+{"type":"assistant","requestId":"g1","message":{"model":"m","usage":{"input_tokens":0,"cache_creation_input_tokens":3000,"cache_read_input_tokens":0,"output_tokens":1}}}
+EOF
+out="$(JOURNALS_DIR="$(pwd)/j5g" HYP_ID=t RUN_LABEL=r RESULTS_PATH=.mvp/experiments/results.jsonl PLUGIN_ROOT="$repo_root" PROJECT_ROOT="$(pwd)" bash "$repo_root/scripts/experiments/h2-tier12.sh" | tail -n 1)"
+assert_eq "h2 refuted при generic в лестнице (generic блокирует только confirmed)" "refuted" "$(jd "$out" 'd["data"]["verdict"]')"
+assert_eq "h2 refuted при generic: generic_ladder_agents виден в value" "1" "$(jd "$out" 'd["data"]["value"]["generic_ladder_agents"]')"
+
 # --- H1 mean_segments считается по рукаву (8 событий segments:1 из confirmed-кейса выше остались в events.jsonl)
 out="$(run_h h1-cap.sh)"
 assert_eq "h1 мало данных: mean_segments из последнего прогона (segments=3 x8)" "3.0" "$(jd "$out" 'd["data"]["value"]["mean_segments"]')"
@@ -268,7 +285,9 @@ assert_eq "h1 эпоха рукава: вердикт по чистой выбо
 # n_generic/n_role >= MIN_OBS помечают эту запись СОСТОЯТЕЛЬНОЙ (находка
 # I4) — без них она не смогла бы стать первым из «двух прогонов подряд»
 # для refuted ниже (см. отдельный тест «ненадёжный предыдущий прогон»).
-echo '{"hypothesis":"t","run_label":"r0","value":{"gap":500,"n_generic":3,"n_role":3},"verdict":null,"ts":"t"}' >> .mvp/experiments/results.jsonl
+# src (находка I-2) — отпечаток ДРУГОГО набора журналов: без него, или с
+# совпадающим с текущим замером, запись за «другой прогон» не считается.
+echo '{"hypothesis":"t","run_label":"r0","value":{"gap":500,"n_generic":3,"n_role":3,"src":"prev-run-src-0001"},"verdict":null,"ts":"t"}' >> .mvp/experiments/results.jsonl
 
 # --- H3 Finding 3, граница снизу: 2 generic + 2 mvp- (MIN_OBS-1 по каждой
 # группе) — gap<2000 и подходящий предыдущий прогон есть, но данных мало →
@@ -340,5 +359,32 @@ echo '{"hypothesis":"unreliable-prev","run_label":"r0","value":{"gap":500},"verd
 out="$(JOURNALS_DIR="$(pwd)/j6" HYP_ID=unreliable-prev RUN_LABEL=r RESULTS_PATH=.mvp/experiments/results.jsonl PLUGIN_ROOT="$repo_root" PROJECT_ROOT="$(pwd)" bash "$repo_root/scripts/experiments/h3-prefix-gap.sh" | tail -n 1)"
 assert_eq "h3 I4: gap<2000 текущий, но prev без n_generic/n_role → НЕ refuted" "None" "$(jd "$out" 'd["data"]["verdict"]')"
 assert_eq "h3 I4: reason называет неизвестную состоятельность prev" "True" "$(jd "$out" '"состоятельность" in d["reason"]')"
+
+# --- H3 находка I-2 (второй проход финального ревью): «два прогона подряд»
+# по данным ОДНОГО прогона. mvp:retro перезапускаем по построению, и повторный
+# разбор меряет те же журналы под новым run_label — раньше вторая запись с тем
+# же значением давала уверенное refuted. Теперь запись зачитывается только из
+# другого прогона: по отличающемуся отпечатку источника данных value.src.
+# (a) src пишется в каждую запись, где посчитан gap.
+cur_src="$(jd "$out" 'd["data"]["value"]["src"]')"
+assert_eq "h3 I-2: src посчитан и непуст" "16" "${#cur_src}"
+# (b) prev СОСТОЯТЕЛЕН по n_*, но src СОВПАДАЕТ с текущим замером (те же
+# журналы j6, повторный разбор; run_label при этом другой — r-again vs r0) →
+# НЕ refuted, reason называет повторный разбор.
+echo "{\"hypothesis\":\"same-src\",\"run_label\":\"r0\",\"value\":{\"gap\":500,\"n_generic\":3,\"n_role\":3,\"src\":\"$cur_src\"},\"verdict\":null,\"ts\":\"t\"}" >> .mvp/experiments/results.jsonl
+out="$(JOURNALS_DIR="$(pwd)/j6" HYP_ID=same-src RUN_LABEL=r-again RESULTS_PATH=.mvp/experiments/results.jsonl PLUGIN_ROOT="$repo_root" PROJECT_ROOT="$(pwd)" bash "$repo_root/scripts/experiments/h3-prefix-gap.sh" | tail -n 1)"
+assert_eq "h3 I-2: prev с совпадающим src (повторный разбор того же прогона) → НЕ refuted" "None" "$(jd "$out" 'd["data"]["verdict"]')"
+assert_eq "h3 I-2: reason называет повторный разбор тех же журналов" "True" "$(jd "$out" '"ТЕМ ЖЕ журналам" in d["reason"]')"
+# (c) prev состоятелен по n_*, src ОТЛИЧАЕТСЯ (настоящий другой прогон) →
+# refuted; это же доказывает, что (b) ломается именно на совпадении src.
+echo '{"hypothesis":"other-src","run_label":"r0","value":{"gap":500,"n_generic":3,"n_role":3,"src":"another-run-src-2"},"verdict":null,"ts":"t"}' >> .mvp/experiments/results.jsonl
+out="$(JOURNALS_DIR="$(pwd)/j6" HYP_ID=other-src RUN_LABEL=r-again RESULTS_PATH=.mvp/experiments/results.jsonl PLUGIN_ROOT="$repo_root" PROJECT_ROOT="$(pwd)" bash "$repo_root/scripts/experiments/h3-prefix-gap.sh" | tail -n 1)"
+assert_eq "h3 I-2: prev с отличающимся src → refuted (другой прогон зачтён)" "refuted" "$(jd "$out" 'd["data"]["verdict"]')"
+# (d) prev состоятелен по n_*, но БЕЗ src (запись формата до I-2) — старый
+# формат пригодным по умолчанию не считается: НЕ refuted.
+echo '{"hypothesis":"no-src","run_label":"r0","value":{"gap":500,"n_generic":3,"n_role":3},"verdict":null,"ts":"t"}' >> .mvp/experiments/results.jsonl
+out="$(JOURNALS_DIR="$(pwd)/j6" HYP_ID=no-src RUN_LABEL=r-again RESULTS_PATH=.mvp/experiments/results.jsonl PLUGIN_ROOT="$repo_root" PROJECT_ROOT="$(pwd)" bash "$repo_root/scripts/experiments/h3-prefix-gap.sh" | tail -n 1)"
+assert_eq "h3 I-2: prev без src (старый формат) → НЕ refuted" "None" "$(jd "$out" 'd["data"]["verdict"]')"
+assert_eq "h3 I-2: reason для старого формата называет отсутствие src" "True" "$(jd "$out" '"src" in d["reason"]')"
 
 exit $fail

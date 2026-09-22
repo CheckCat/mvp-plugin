@@ -186,9 +186,25 @@ assert_eq "отсутствующий registry: check ok" "False" "$(jget "$last
 # (11) проводка JOURNALS_DIR (находка I1): Шаг 5 retro обязан передавать
 # каталог журналов, справочник — описывать переменную в контракте env и
 # объяснять цену её отсутствия (голодание гипотез).
-grep -qF 'JOURNALS_DIR=<каталог agent-*.jsonl из Шага 3> ${CLAUDE_PLUGIN_ROOT}/lib/experiments.sh check <stamp>' \
+grep -qF 'JOURNALS_DIR=<каталог agent-*.jsonl из Шага 3> ${CLAUDE_PLUGIN_ROOT}/lib/experiments.sh check $(git rev-parse --short HEAD)' \
   "$repo_root/skills/retro/SKILL.md" \
   || { echo "FAIL: retro/SKILL.md Шаг 5 не передаёт JOURNALS_DIR — H2/H3 голодают и закроются «недоказуемо»" >&2; fail=1; }
+
+# (11b) второй проход финального ревью (следствие I-2): run_label обязан быть
+# СТАБИЛЬНЫМ на прогон (HEAD), не временем разбора — иначе каждый повторный
+# mvp:retro (он перезапускаем по построению) плодит «новый прогон» в
+# счётчике runs_seen у ВСЕХ гипотез и приближает их закрытие по исчерпанию
+# ttl_runs, ничего не измерив.
+grep -qF 'check $(git rev-parse --short HEAD)' "$repo_root/skills/retro/SKILL.md" \
+  || { echo "FAIL: retro/SKILL.md Шаг 5: run_label должен быть HEAD прогона, не временем разбора" >&2; fail=1; }
+grep -qF 'повторный разбор не плодит' "$repo_root/skills/retro/SKILL.md" \
+  || { echo "FAIL: retro/SKILL.md Шаг 5 не объясняет, зачем метка стабильна" >&2; fail=1; }
+
+# (11c) второй проход финального ревью (мелкая находка 5): требование
+# «file:line, открытая глазами» — поведенческое требование к верификации
+# кандидата, а не проза; однажды уже потерялось при выкраивании байтов.
+grep -qF '`file:line`, открытая глазами' "$repo_root/skills/retro/SKILL.md" \
+  || { echo "FAIL: retro/SKILL.md Шаг 3 потерял требование «file:line, открытая глазами»" >&2; fail=1; }
 grep -qF 'PROJECT_ROOT, JOURNALS_DIR' "$repo_root/skills/retro/references/experiments-handbook.md" \
   || { echo "FAIL: experiments-handbook не называет JOURNALS_DIR в контракте env check-скрипта" >&2; fail=1; }
 grep -qF '`JOURNALS_DIR` обязателен' "$repo_root/skills/retro/references/experiments-handbook.md" \

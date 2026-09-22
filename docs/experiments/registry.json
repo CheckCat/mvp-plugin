@@ -11,12 +11,12 @@
       "title": "Экономия Tier 1+2 на живом прогоне сходится с реплеем",
       "status": "open", "mode_required": "passive",
       "check_script": "scripts/experiments/h2-tier12.sh",
-      "threshold": "n_reviewer>=3 (журналов agentType=mvp-reviewer в JOURNALS_DIR): confirmed при median_reviewer_prefix <= 16000 токенов И generic_ladder_agents(agentType=workflow-subagent)==0; refuted при median_reviewer_prefix > 24000; между 16000 и 24000, либо есть generic, либо n_reviewer<3 -> вердикта нет",
+      "threshold": "n_reviewer>=3 (журналов agentType=mvp-reviewer в JOURNALS_DIR): confirmed при median_reviewer_prefix <= 16000 токенов И generic_ladder_agents(agentType=workflow-subagent)==0; refuted при median_reviewer_prefix > 24000 НЕЗАВИСИМО от generic (диета провалена по самой медиане, посторонние generic-агенты этого не оправдывают); наличие generic блокирует только confirmed; median между 16000 и 24000, либо n_reviewer<3 -> вердикта нет",
       "ttl_runs": 6, "opened": "2026-09-22" },
     { "id": "H3-prefix-gap-alive",
       "title": "Разрыв префикса generic vs ролевой ещё жив (B-M1 не съеден харнессом)",
       "status": "open", "mode_required": "passive",
       "check_script": "scripts/experiments/h3-prefix-gap.sh",
-      "threshold": "gap = медиана(generic ctx0, agentType=workflow-subagent) - медиана(ролевой ctx0, agentType mvp-*), считается при любом непустом generic- и ролевом наборе; а вот ВЕРДИКТ гейтится n_generic>=3 и n_role>=3 в ОБОИХ сравниваемых прогонах (текущем и предыдущей зачтённой записи этой гипотезы); refuted при gap<2000 в двух таких надёжных прогонах подряд (харнесс догнал разрыв, B-M1 избыточен); один надёжный прогон, либо прогон(ы) с недостаточными наблюдениями -> вердикта нет (gap при этом посчитан и виден в value, просто не решает)",
+      "threshold": "gap = медиана(generic ctx0, agentType=workflow-subagent) - медиана(ролевой ctx0, agentType mvp-*), считается при любом непустом generic- и ролевом наборе; а вот ВЕРДИКТ гейтится n_generic>=3 и n_role>=3 в ОБОИХ сравниваемых прогонах, причём предыдущая запись зачитывается только из ДРУГОГО прогона — по отличающемуся отпечатку источника данных value.src (retro перезапускаем, run_label штампуется заново на каждый разбор, так что метка «другой прогон» не доказывает; запись без src — старый формат, пригодной не считается); refuted при gap<2000 в двух таких надёжных прогонах подряд (харнесс догнал разрыв, B-M1 избыточен); один надёжный прогон, повторный разбор тех же журналов, либо прогон(ы) с недостаточными наблюдениями -> вердикта нет (gap при этом посчитан и виден в value, просто не решает)",
       "ttl_runs": 12, "opened": "2026-09-22" }
   ] }
