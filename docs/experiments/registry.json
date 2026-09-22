@@ -4,7 +4,7 @@
       "title": "CAP=30 не теряет работу за швом",
       "status": "needs-optin", "mode_required": "greedy",
       "check_script": "scripts/experiments/h1-cap.sh",
-      "threshold": "n_arm>=8 и n_control>=4 (события task_complete с полем arm=cap30/control): confirmed при mean_disp_arm <= 1.53 * mean_disp_control; refuted при mean_disp_arm > 2.5 * mean_disp_control; между этими порогами либо при нехватке n_arm/n_control -> вердикта нет; confirmed дополнительно гасится в null, если план прогона содержит задачу co status=failed (см. notes)",
+      "threshold": "n_arm>=8 и n_control>=4 (события task_complete с полем arm=cap30/control): confirmed при mean_disp_arm <= 1.53 * mean_disp_control; refuted при mean_disp_arm > 2.5 * mean_disp_control; между этими порогами либо при нехватке n_arm/n_control -> вердикта нет; confirmed дополнительно гасится в null, если план прогона содержит задачу со status=failed (см. notes)",
       "ttl_runs": 10, "opened": "2026-09-22",
       "notes": "capped-копии ролей НЕ штампуются в plugin-lock: check показывает их в derived_unstamped (foreign) — это ожидаемо, гейт не блокирует. ЧТО ЗНАЧИТ confirmed (fix round 1, Finding 1): только то, что у задач, ДОШЕДШИХ до task_complete, диспатчи рукава не больше 1.53x контроля (при n_arm>=8, n_control>=4). Задача, которую рукав тихо потерял — упёрлась, запарковалась, осталась status=failed в .mvp/plan.json — событие task_complete не порождает вовсе и в эту арифметику не попадает; check-скрипт поэтому НЕ выносит confirmed, если план прогона содержит failed-задачу (уходит в null) — но это страховка на одну известную дыру, не гарантия полноты" },
     { "id": "H2-tier12-savings-match",
@@ -17,6 +17,6 @@
       "title": "Разрыв префикса generic vs ролевой ещё жив (B-M1 не съеден харнессом)",
       "status": "open", "mode_required": "passive",
       "check_script": "scripts/experiments/h3-prefix-gap.sh",
-      "threshold": "gap = медиана(generic ctx0, agentType=workflow-subagent) - медиана(ролевой ctx0, agentType mvp-*), считается только при n_generic>=3 и n_role>=3 в ОБОИХ сравниваемых прогонах (текущем и предыдущей зачтённой записи этой гипотезы); refuted при gap<2000 в двух таких надёжных прогонах подряд (харнесс догнал разрыв, B-M1 избыточен); один надёжный прогон, либо прогон(ы) с недостаточными наблюдениями -> вердикта нет",
+      "threshold": "gap = медиана(generic ctx0, agentType=workflow-subagent) - медиана(ролевой ctx0, agentType mvp-*), считается при любом непустом generic- и ролевом наборе; а вот ВЕРДИКТ гейтится n_generic>=3 и n_role>=3 в ОБОИХ сравниваемых прогонах (текущем и предыдущей зачтённой записи этой гипотезы); refuted при gap<2000 в двух таких надёжных прогонах подряд (харнесс догнал разрыв, B-M1 избыточен); один надёжный прогон, либо прогон(ы) с недостаточными наблюдениями -> вердикта нет (gap при этом посчитан и виден в value, просто не решает)",
       "ttl_runs": 12, "opened": "2026-09-22" }
   ] }
