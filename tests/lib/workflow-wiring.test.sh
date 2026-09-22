@@ -123,9 +123,24 @@ need_code "adv\.data\.experiments === 'greedy' && !!adv\.data\.capped_role" "р�
 need_code "const armEligible = adv\.data\.experiments === 'greedy'" "рукав должен требовать experiments==='greedy' в самом начале armEligible — иначе включится в off/passive"
 
 # (2) «чётность среза»: armActive обязан требовать И armEligible, И чётность
-# tasksDone. Пин на полную строку — уберут `&& (tasksDone % 2 === 0)`, и
-# нечётные задачи (контроль) перестанут существовать.
-need_code "const armActive = armEligible && \(tasksDone % 2 === 0\)" "нет чётного среза — рукав обязан активироваться только на чётных tasksDone, иначе контрольная половина прогона исчезает"
+# ПОЗИЦИИ задачи в плане (task_index из payload next — финальное ревью,
+# находка I6). Откат на счётчик запуска (tasksDone) тест обязан ловить:
+# счётчик обнуляется на каждом старте оркестратора, первая задача любого
+# запуска попадала бы в рукав, а упавшая в рукаве задача при перезапуске
+# попадала бы в него снова.
+need_code "const armActive = armEligible && \(taskIndex % 2 === 0\)" "нет чётного среза по позиции в плане — рукав обязан резать чёт/нечет по task_index (стабилен между запусками), не по tasksDone (обнуляется на каждом старте)"
+need_code "const taskIndex = adv\.data\.task_index" "taskIndex обязан браться из payload next (plan-io.mjs task_index), а не из счётчика внутри запуска"
+
+# (2б) исключение явного --task из рукава (находка I6): пере-прогон одной
+# задачи по решению оператора — смещённая выборка, ни cap30, ни control.
+# Пин на точное выражение внутри armEligible.
+need_code "Number\.isInteger\(taskIndex\) && !argv\.task_id" "armEligible обязан требовать известный task_index И отсутствие явного --task — иначе перезапуск упавшей задачи снова попадает в рукав (цикл без выхода)"
+
+# Выход из цикла обязан быть НАЗВАН в park-тексте «сегменты исчерпаны»
+# (находка I6): и путь мимо рукава (явный task_id), и полное отключение
+# (режим экспериментов в state.json).
+need_code "set experiments passive" "park-текст «сегменты исчерпаны» обязан называть выход: переключение режима экспериментов в состоянии проекта"
+need_code "идёт МИМО рукава" "park-текст «сегменты исчерпаны» обязан называть выход: перезапуск задачи явным task_id идёт мимо рукава"
 
 # сегментный потолок: пин на объявление с конкретным числом — не просто
 # встречаемость идентификатора CAP_SEGMENTS (который иначе можно было бы
@@ -167,6 +182,38 @@ need_code "implementer \(cap arm\) returned no text after \\\$\{segments\} segme
 # разводке. Считаем подстановку `${handoffReason}` вне комментариев — ровно 2
 # точки (было 1 до этого фикса).
 need_count_code "\\\$\{handoffReason\}" "2" "причина handoff.sh обязана звучать в ОБЕИХ park-ветках (new «never started» + старая «declined to continue»), не потеряться при разводке текста"
+
+# --- mech_roles (финальное ревью, находка C1) --------------------------------
+# Проект со старой версии плагина не имеет файлов mvp-*.md; узкая роль там
+# не должна диспатчиться ВООБЩЕ — пустой ответ на не-retryable команде
+# (save-review, finalize, apply-patches, handoff, установка фазы) бросает
+# исключение до запасной попытки, а повтор запрещён законом недублирования.
+# Поведенческий тест сценария — tests/lib/workflow-noroles.test.sh; здесь —
+# проводка: mechRoles обязан существовать, кормиться из payload next ДО
+# halt-ветки и гейтить каждую точку узкого диспатча.
+
+need_code "const mechRoles = \{ 'mvp-reviewer': true, 'mvp-validator': true, 'mvp-relay': true \}" "нет реестра mechRoles с оптимистичным дефолтом (payload без поля = прежнее поведение)"
+need_code "noteMechRoles\(adv\.data && adv\.data\.mech_roles\)" "mech_roles из payload next не применяется — оркестратор не узнаёт об отсутствии ролей"
+
+# noteMechRoles обязан отработать ДО halt-ветки: за all-done идёт
+# не-retryable релей установки фазы (тот же приём сравнения позиций, что для
+# all-abstain/blind выше).
+line_note="$(grep_code "noteMechRoles\(adv\.data && adv\.data\.mech_roles\)" | head -1)"
+line_halt="$(grep_code "if \(adv\.data && adv\.data\.halt\)" | head -1)"
+if [ -z "${line_note:-}" ] || [ -z "${line_halt:-}" ]; then
+  echo "FAIL: workflow.mjs: не нашёл обе точки вне комментариев для проверки порядка noteMechRoles/halt-ветки" >&2
+  fail=1
+elif [ "$line_note" -ge "$line_halt" ]; then
+  echo "FAIL: workflow.mjs: noteMechRoles(adv.data...) обязан идти ДО halt-ветки — иначе релей установки фазы после all-done диспатчит несуществующую роль и умирает" >&2
+  fail=1
+fi
+
+# Каждая точка узкого диспатча гейтится существованием файла роли:
+# relayLine + relay — по mechRoles['mvp-relay'] (обе через const narrow),
+# три ревью-диспатча — spread-условием, валидатор — одним.
+need_count_code "const narrow = mechRoles\['mvp-relay'\]" "2" "обе релей-точки (relayLine + relay) обязаны спрашивать mechRoles перед узким диспатчем"
+need_count_code "\.\.\.\(mechRoles\['mvp-reviewer'\] \? \{ agentType: 'mvp-reviewer' \} : \{\}\)" "3" "все три ревью-диспатча (опрос-цикл + reviewer-retry + re-review) обязаны гейтиться mechRoles"
+need_count_code "\.\.\.\(mechRoles\['mvp-validator'\] \? \{ agentType: 'mvp-validator' \} : \{\}\)" "1" "диспатч валидатора обязан гейтиться mechRoles"
 
 # Sanity-parse (та же команда, что в Global Constraints)
 node -e "const src=require('fs').readFileSync('$wf','utf8').replace(/^export const meta[\s\S]*?^}/m,''); new (Object.getPrototypeOf(async function(){}).constructor)('agent','parallel','pipeline','log','phase','args','budget','workflow', src)" || { echo "FAIL: sanity-parse" >&2; fail=1; }

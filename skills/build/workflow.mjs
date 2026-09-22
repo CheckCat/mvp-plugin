@@ -508,6 +508,39 @@ let lib = ''; // argv.plugin_root + '/lib', set once argv is known-valid
 // decide whether it needs parsing at all).
 let argv = {};
 
+// mechRoles (финальное ревью, находка C1): какие файлы узких ролей механики
+// (.claude/agents/mvp-*.md) СУЩЕСТВУЮТ в целевом проекте. Источник —
+// аддитивное поле `mech_roles` в каждом ответе `plan-io.mjs next` (у этого
+// скрипта нет файловой системы, проверку делает plan-io). Дефолт «все есть» =
+// прежнее поведение: payload без поля ничего не меняет.
+//
+// Зачем: проект, обновлённый со старой версии плагина, этих файлов не имеет
+// вовсе, и диспатч узкой роли всегда возвращает пустой результат. Для
+// retryable-релеев это лечит generic-фолбэк, но не-retryable команды
+// (save-review, apply-patches, finalize, handoff, установка фазы) обязаны
+// бросать исключение после ПЕРВОЙ пустой попытки — пустой ответ не
+// доказывает, что команда не исполнялась, и повтор рискует вторым коммитом
+// (закон недублирования). Единственный безопасный путь — с самого начала не
+// диспатчить роль, которой нет: прогон идёт как до появления узких ролей
+// (медленнее и дороже, но работает). Об этом говорится в лог один раз.
+const mechRoles = { 'mvp-reviewer': true, 'mvp-validator': true, 'mvp-relay': true };
+let mechRolesLogged = false;
+
+function noteMechRoles(m) {
+  if (!m || typeof m !== 'object') return;
+  const map = { reviewer: 'mvp-reviewer', validator: 'mvp-validator', relay: 'mvp-relay' };
+  for (const key of Object.keys(map)) {
+    if (typeof m[key] === 'boolean') mechRoles[map[key]] = m[key];
+  }
+  const missing = Object.keys(mechRoles).filter((r) => !mechRoles[r]);
+  if (missing.length && !mechRolesLogged) {
+    mechRolesLogged = true;
+    log(`роли механики отсутствуют на диске (.claude/agents): ${missing.join(', ')} — прогон идёт без узких agentType, `
+      + 'как до их появления (медленнее и дороже, но работает). Лечение: запусти mvp:sync — он собирает роли механики '
+      + 'безусловно, даже когда lock говорит «проект соответствует плагину», — затем перезапусти сессию.');
+  }
+}
+
 // --- relay primitives ---------------------------------------------------------
 
 const RELAY_SCHEMA = {
@@ -559,9 +592,12 @@ async function relayLine(cmd, opts = {}) {
     label: opts.label || cmd,
     phase: opts.phase,
   };
+  // narrow=false (файла mvp-relay.md в проекте нет — находка C1): узкая роль
+  // не диспатчится вовсе, первая же попытка идёт generic — как до этой ветки.
+  const narrow = mechRoles['mvp-relay'];
   dispatchCount += 1;
-  let out = await agent(prompt, { ...callOpts, agentType: 'mvp-relay' });
-  if (!out || typeof out.line !== 'string') {
+  let out = await agent(prompt, narrow ? { ...callOpts, agentType: 'mvp-relay' } : callOpts);
+  if (narrow && (!out || typeof out.line !== 'string')) {
     log(RELAY_FALLBACK_LOG);
     dispatchCount += 1;
     out = await agent(prompt, callOpts);
@@ -680,19 +716,27 @@ async function relay(cmd, opts = {}) {
     }
   };
 
-  let result = await attempt(true);
+  // narrow=false (файла mvp-relay.md нет — находка C1): первая попытка сразу
+  // generic. Критично для retryable:false — узкая попытка на несуществующей
+  // роли вернула бы null, а повтор такой команды запрещён (второй коммит).
+  const narrow = mechRoles['mvp-relay'];
+  let result = await attempt(narrow);
   if (result) return result;
 
   if (!retryable) {
     throw new Error(
-      `relay: agent did not return a valid, coercible {ok:boolean,...} structured result (non-retryable command, no second attempt). cmd=${fullCmd}`,
+      `relay: agent did not return a valid, coercible {ok:boolean,...} structured result (non-retryable command, no second attempt${
+        narrow
+          ? '; первая попытка шла на agentType "mvp-relay" — если файл роли есть, но сессия стартовала до его сборки, роль не зарегистрирована: перезапусти сессию. Команда МОГЛА успеть исполниться — проверь состояние (git log, plan.json) прежде чем повторять'
+          : ''
+      }). cmd=${fullCmd}`,
     );
   }
   // The existing retry (design note 12's single-retry ladder) doubles as the
   // mvp-relay fallback: an unregistered narrow agentType returns null from
   // attempt(true) exactly like a bad reply would, so this second attempt
   // going generic costs nothing extra and rescues both cases identically.
-  log(RELAY_FALLBACK_LOG);
+  if (narrow) log(RELAY_FALLBACK_LOG);
   result = await attempt(false);
   if (result) return result;
   throw new Error(
@@ -1131,11 +1175,14 @@ async function runValidateLadder(ctx) {
     return { parked: false };
   }
 
+  // Роль подставляется только если её файл существует (mechRoles, находка
+  // C1) — без файла dispatchAgentText шёл бы через мёртвую попытку + фолбэк
+  // на каждый вызов, а здесь просто сразу generic, как до этой ветки.
   const verdictText = await dispatchAgentText(validatorPrompt({ taskId: ctx.id, boundary: ctx.boundary, violations }), {
     model: 'sonnet',
     phase: 'Validate',
     label: `validator-${ctx.id}`,
-    agentType: 'mvp-validator',
+    ...(mechRoles['mvp-validator'] ? { agentType: 'mvp-validator' } : {}),
   });
   const verdict = parseValidatorVerdict(verdictText);
 
@@ -1266,9 +1313,11 @@ async function runReviewLadder(ctx) {
     // agentType direct, NOT dispatchAgentText: a generic-agentType retry of
     // a whole reviewer poll would erase the turn-cap saving this narrow role
     // exists for, exactly on the long polls where it matters most.
+    // Узкая роль — только при существующем файле (mechRoles, находка C1):
+    // опрос несуществующей роли — это три «воздержался» и park, а не ревью.
     const text = await agentText(
       reviewerPrompt({ taskId: ctx.id, briefPath: ctx.briefPath, packagePath: rp.data.path }),
-      { model: 'sonnet', phase: 'Review', label, agentType: 'mvp-reviewer' },
+      { model: 'sonnet', phase: 'Review', label, ...(mechRoles['mvp-reviewer'] ? { agentType: 'mvp-reviewer' } : {}) },
     );
     // Persisted BEFORE it is parsed: the reply is evidence whatever the parser
     // then makes of it, and an unparseable one is precisely the reply worth
@@ -1302,7 +1351,9 @@ async function runReviewLadder(ctx) {
   const live = polls.filter((p) => !p.abstain);
   if (live.length === 0) {
     return { parked: true, why: `all ${REVIEW_SAMPLES} review polls returned no text — either agentType "mvp-reviewer" is not registered `
-      + '(run mvp:sync, restart the session) or every poll hit its turn cap. No review happened, so no verdict is possible.' };
+      + 'in THIS session (its file exists on disk — plan-io checked — but agents register at session start: restart the session; '
+      + 'if the file is missing, mvp:sync assembles the mechanic roles unconditionally, then restart) '
+      + 'or every poll hit its turn cap. No review happened, so no verdict is possible.' };
   }
   if (abstained.length) {
     ctx.concerns.push(`${abstained.length} of ${REVIEW_SAMPLES} review polls returned no text (turn cap or dead agentType) and were counted as abstain`);
@@ -1369,7 +1420,7 @@ async function runReviewLadder(ctx) {
         reviewerPrompt({ taskId: ctx.id, briefPath: ctx.briefPath, packagePath: rp.data.path }),
         blockedPolls[0].text,
       ),
-      { model: 'sonnet', phase: 'Review', label, agentType: 'mvp-reviewer' },
+      { model: 'sonnet', phase: 'Review', label, ...(mechRoles['mvp-reviewer'] ? { agentType: 'mvp-reviewer' } : {}) },
     );
     const savedRetry = await relay(
       `bash "${lib}/save-review.sh" "${ctx.id}" ${shQuote(label)} --b64 ${b64Payload(retryText == null ? '' : retryText)}`,
@@ -1469,7 +1520,7 @@ async function runReviewLadder(ctx) {
   // general-purpose fallback.
   const reReviewText = await dispatchAgentText(
     reReviewPrompt({ taskId: ctx.id, packagePath: rp.data.path, findings }),
-    { model: 'sonnet', phase: 'Review', label: `re-review-${ctx.id}`, agentType: 'mvp-reviewer' },
+    { model: 'sonnet', phase: 'Review', label: `re-review-${ctx.id}`, ...(mechRoles['mvp-reviewer'] ? { agentType: 'mvp-reviewer' } : {}) },
   );
   if (reReviewText == null) {
     return { parked: true, why: 're-review dispatch failed: both agentType and general-purpose fallback returned no result' };
@@ -1732,7 +1783,7 @@ async function park(id, boundary, why) {
 // hand which task had been in flight.
 let inFlightTask = null;
 
-async function runOneTask(adv, tasksDone) {
+async function runOneTask(adv) {
   const id = adv.data.task_id;
   const briefPath = adv.data.brief_path;
   const boundary = adv.data.boundary;
@@ -1747,8 +1798,21 @@ async function runOneTask(adv, tasksDone) {
   // capped-роли, и только на чётном срезе исполнения — нечётные задачи
   // прогона остаются контролем. ЗАКОН: рукав меняет параметры УЖЕ
   // исполняемых диспатчей, никогда не добавляя ни прогона, ни задачи.
-  const armEligible = adv.data.experiments === 'greedy' && !!adv.data.capped_role;
-  const armActive = armEligible && (tasksDone % 2 === 0);
+  //
+  // Чётность (финальное ревью, находка I6) — по ПОЗИЦИИ задачи в плане
+  // (task_index из payload next), не по счётчику задач этого запуска:
+  // счётчик обнулялся на каждом старте оркестратора, поэтому первая задача
+  // ЛЮБОГО запуска попадала в рукав (перекос выборки при коротких
+  // запусках), а задача, которую рукав уронил (сегменты исчерпаны — park),
+  // при перезапуске попадала в рукав снова — цикл. Позиция в плане
+  // стабильна между запусками: add-task только дописывает в конец.
+  // Запуск с явным --task (argv.task_id) исключается целиком — это
+  // пере-прогон по решению оператора, смещённая выборка: ни cap30, ни
+  // control, никаких arm-полей в телеметрии.
+  const taskIndex = adv.data.task_index;
+  const armEligible = adv.data.experiments === 'greedy' && !!adv.data.capped_role
+    && Number.isInteger(taskIndex) && !argv.task_id;
+  const armActive = armEligible && (taskIndex % 2 === 0);
   const arm = armEligible ? (armActive ? 'cap30' : 'control') : null;
 
   // Token-delta measurement starts here, at the very top of the task
@@ -1829,7 +1893,9 @@ async function runOneTask(adv, tasksDone) {
           + `mvp:bootstrap's cap step for this role never ran — fix that first. (handoff.sh: ${handoffReason})`
         : handoffReason
           ? `implementer (cap arm) returned no text after ${segments} segment(s); handoff.sh declined to continue: ${handoffReason}`
-          : `implementer (cap arm) returned no text after ${segments} segment(s) — ${CAP_SEGMENTS} segments were exhausted with handoff.sh still returning ok:true each time`;
+          : `implementer (cap arm) returned no text after ${segments} segment(s) — ${CAP_SEGMENTS} segments were exhausted with handoff.sh still returning ok:true each time. `
+            + 'Выход из рукава: перезапуск этой задачи явным task_id идёт МИМО рукава (явно указанная задача в эксперимент не попадает); '
+            + 'отключить рукав на весь прогон — переключи режим экспериментов в состоянии проекта: bash <plugin>/lib/state.sh set experiments passive (или off)';
       return park(id, boundary, why);
     }
   } else {
@@ -2022,6 +2088,9 @@ try {
     if (!adv.ok) {
       throw new Error(`plan-io.mjs next failed: ${adv.reason || 'unknown'}`);
     }
+    // mech_roles применяется ДО halt-ветки (находка C1): за all-done следует
+    // не-retryable релей установки фазы, и он обязан знать, есть ли роль.
+    noteMechRoles(adv.data && adv.data.mech_roles);
     if (adv.data && adv.data.halt) {
       // all-done | dag-stuck | interrupt | dirty-tree — propagate verbatim,
       // the calling SKILL owns the halt-table dispatch. `files` is carried
@@ -2057,7 +2126,7 @@ try {
       return withRunLabels(haltPayload);
     }
 
-    const outcome = await runOneTask(adv, tasksDone);
+    const outcome = await runOneTask(adv);
     if (outcome.halt) return withRunLabels(outcome); // park() propagates its stop-and-ask halt directly
 
     results.push({ task_id: outcome.task_id, sha: outcome.sha, tokens_delta: outcome.tokens_delta, concerns: outcome.concerns });

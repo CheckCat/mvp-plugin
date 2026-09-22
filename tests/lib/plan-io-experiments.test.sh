@@ -31,10 +31,15 @@ git add .mvp/plan.json
 git commit -q -m "chore: seed plan"
 printf '%s' '{"phase":"build"}' > .mvp/state.json
 
-# (1) без ключа experiments → greedy; capped-файла нет → capped_role null
+# (1) без ключа experiments → greedy; capped-файла нет → capped_role null.
+# Плюс аддитивные поля финального ревью: mech_roles (C1 — ролей механики в
+# фикстуре нет, все false) и task_index (I6 — задача 001 стоит в плане первой).
 out="$(node "$repo_root/lib/plan-io.mjs" next | tail -n 1)"
 assert_eq "experiments default" "greedy" "$(jfield "$out" 'd["data"]["experiments"]')"
 assert_eq "capped_role null" "None" "$(jfield "$out" 'd["data"]["capped_role"]')"
+assert_eq "mech_roles: без файлов всё false" "False False False" \
+  "$(jfield "$out" 'str(d["data"]["mech_roles"]["reviewer"])+" "+str(d["data"]["mech_roles"]["validator"])+" "+str(d["data"]["mech_roles"]["relay"])')"
+assert_eq "task_index первой задачи" "0" "$(jfield "$out" 'd["data"]["task_index"]')"
 
 # (2) passive из state.json доезжает
 python3 - <<'EOF'
@@ -69,5 +74,25 @@ node "$repo_root/lib/plan-io.mjs" complete 002 --tokens 1 --dispatches 1 >/dev/n
 ev="$(tail -n 1 .mvp/telemetry/events.jsonl)"
 assert_eq "без флагов arm отсутствует" "False" "$(jfield "$ev" '"arm" in d')"
 assert_eq "без флагов segments отсутствует" "False" "$(jfield "$ev" '"segments" in d')"
+
+# (6) mech_roles отражает СУЩЕСТВУЮЩИЕ файлы ролей механики (находка C1):
+# кладём только mvp-relay.md — relay true, reviewer/validator остаются false.
+# Заодно task_index: 001/002 done, next выдаёт 003 — третью позицию плана,
+# и позиция не зависит от того, что это первая задача «этого запуска» (I6).
+echo x > .claude/agents/mvp-relay.md
+git add .claude/agents/mvp-relay.md
+git commit -q -m "chore: seed mvp-relay role"
+out="$(node "$repo_root/lib/plan-io.mjs" next | tail -n 1)"
+assert_eq "mech_roles.relay true при файле" "True" "$(jfield "$out" 'd["data"]["mech_roles"]["relay"]')"
+assert_eq "mech_roles.reviewer false без файла" "False" "$(jfield "$out" 'd["data"]["mech_roles"]["reviewer"]')"
+assert_eq "mech_roles.validator false без файла" "False" "$(jfield "$out" 'd["data"]["mech_roles"]["validator"]')"
+assert_eq "task_index третьей задачи" "2" "$(jfield "$out" 'd["data"]["task_index"]')"
+
+# (7) mech_roles едет и на халте (C1: за all-done идёт не-retryable релей
+# установки фазы — оркестратору нужно знать про роли ДО него).
+node "$repo_root/lib/plan-io.mjs" complete 003 --tokens 1 --dispatches 1 >/dev/null
+out="$(node "$repo_root/lib/plan-io.mjs" next | tail -n 1)"
+assert_eq "халт all-done" "all-done" "$(jfield "$out" 'd["data"]["halt"]')"
+assert_eq "mech_roles есть на халте" "True" "$(jfield "$out" '"mech_roles" in d["data"]')"
 
 exit $fail
