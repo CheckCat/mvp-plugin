@@ -5,33 +5,35 @@ description: Use when the plugin was updated to rebuild derived project artifact
 
 # mvp:sync
 
-**Announce at start:** «Using mvp:sync to realign project artifacts with the current plugin».
+**Announce at start:** «Using mvp:sync to realign project artifacts».
 
 **Iron Law: чинится только производное; нормативка докладывается, но никогда не применяется автоматически.**
 
 Скилл терминальный: **NEXT отсутствует**.
 
-## Шаг 1 — проверка
+## Шаг 1 — проверка + роли механики
 
 ```
 ${CLAUDE_PLUGIN_ROOT}/lib/plugin-lock.sh check
 ```
 
-`ok:true` → скажи «проект соответствует плагину», останови скилл.
+`data.lock_broken:true` → [справочник](references/sync-handbook.md) (**Load when:** lock не парсится).
 
-`data.lock_broken:true` → [references/sync-handbook.md](references/sync-handbook.md) (**Load when:** lock не парсится).
+Затем безусловно, при любом исходе check (справочник «Роли механики»): `assemble-agent.sh mvp-reviewer`, `mvp-validator`, `mvp-relay` — скрипт с Шага 3.
+
+check `ok:true` → скажи «проект соответствует плагину», стоп; роли изменились → сперва фраза HARD-GATE.
 
 ## Шаг 2 — нет отметки (`lock_present:false`)
 
 Stop&Ask: роли `.claude/agents/*.md`, стек — `## Stack` (`docs/product/technical-solutions.md`); жди подтверждения.
 
-**Не угадывай.** Стек не хранится машинно-читаемо; угадывание по описанию неточно — ошибка молча даёт не того агента.
+**Не угадывай:** стек не хранится машинно-читаемо, ошибка даёт не того агента.
 
-Нельзя печатать lock без пересборки — залочит расхождение как норму.
+Нельзя печатать lock без пересборки — залочит расхождение.
 
 ## Шаг 3 — пересборка
 
-Роли: нет lock → все с Шага 2 (`derived_*` пусты); иначе — `derived_stale`/`derived_tampered`/`derived_missing`/`derived_unstamped`, но из `derived_unstamped` — только роли с шаблоном в плагине (справочник: посторонний агент).
+Роли: нет lock → все с Шага 2 (`derived_*` пусты); иначе — все `derived_*`-находки, из `derived_unstamped` — только роли с шаблоном (справочник: посторонний агент).
 
 На каждую:
 
@@ -39,9 +41,11 @@ Stop&Ask: роли `.claude/agents/*.md`, стек — `## Stack` (`docs/product
 ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/assemble-agent.sh <role> [stack]
 ```
 
-`stack` — из `data.derived_*[].stack` или Шага 2; пустой не передавай, lock обновится сам.
+`stack` — из находки или Шага 2; пустой не передавай, lock обновится сам.
 
-`derived_missing`/`derived_unstamped` без `stack` (поля нет) — спроси оператора, как на Шаге 2.
+Находка без `stack` — спроси оператора, как на Шаге 2.
+
+У роли есть `<role>-capped.md` → обнови: `assemble-agent.sh --capped <role>` (справочник «Capped-копии»).
 
 Затем:
 
@@ -49,17 +53,17 @@ ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/assemble-agent.sh <role> [stack]
 ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/verify-agents-drift.sh
 ```
 
-`ok:false` — НЕ правь `.claude/agents/*.md` руками, чини `assemble-agent.sh`.
+`ok:false` — НЕ правь агентов руками, чини `assemble-agent.sh`.
 
 ## Шаг 4 — нормативка
 
-Покажи `normative_changed`/`normative_added`/`normative_removed`. `plugin.git_sha` в `.mvp/plugin-lock.json` непуст, плагин — чекаут:
+Покажи `normative_changed`/`_added`/`_removed`. `plugin.git_sha` в lock непуст, плагин — чекаут:
 
 ```
 git -C ${CLAUDE_PLUGIN_ROOT} diff <git_sha>..HEAD -- <пути>
 ```
 
-Нет коммита (переустановка, force-push) — пути без ошибки.
+Нет коммита (переустановка) — пути без ошибки.
 
 ## Шаг 5 — Stop&Ask по нормативке
 
@@ -69,22 +73,22 @@ git -C ${CLAUDE_PLUGIN_ROOT} diff <git_sha>..HEAD -- <пути>
 ${CLAUDE_PLUGIN_ROOT}/lib/plan-io.mjs add-task --json '{...}'
 ```
 
-## Шаг 6 — после подтверждения оператора
+## Шаг 6 — после подтверждения
 
 ```
 ${CLAUDE_PLUGIN_ROOT}/lib/plugin-lock.sh seal
 ${CLAUDE_PLUGIN_ROOT}/lib/finalize.sh sync <msg-file>
 ```
 
-Заводил задачу на Шаге 5 → `... --files .mvp/plan.json` (расширяет пресет, не заменяет).
+Заводил задачу на Шаге 5 → `... --files .mvp/plan.json` (расширяет пресет).
 
 `<msg-file>` первой строкой: `chore: sync project artifacts with plugin`.
 
-Таблица рационализаций — [references/sync-handbook.md](references/sync-handbook.md) (**Load when:** тянет срезать угол).
+Таблица рационализаций — [справочник](references/sync-handbook.md) (**Load when:** тянет срезать угол).
 
 ## HARD-GATE
 
-Покажи: пересобрано, `verify-agents-drift.sh`, нормативные изменения, sha коммита.
+Покажи: пересобрано, дрейф-чек, нормативные изменения, sha коммита.
 
 Пересобран хоть один агент — скажи оператору **дословно**:
 
