@@ -1786,11 +1786,19 @@ async function runOneTask(adv, tasksDone) {
     // → обычный park). Цена промаха — выброс сегмента; допуск до 52% промахов
     // (final-verdict), ветке достаточно быть правой в двух случаях из трёх.
     const CAP_SEGMENTS = 4;
+    // handoffReason: handoff.sh's own `reason` on an ok:false reply — surfaced
+    // verbatim in the park message below (fix round 1, finding 3) so an
+    // operator can tell the ORDINARY signal ("clean tree — not a cap break",
+    // handoff.sh's ok:false for the discriminator's normal negative case)
+    // apart from an internal handoff.sh failure (not a git repo, mkdir/write
+    // failed) — both used to collapse into the same generic park text with
+    // the script's own diagnosis discarded.
+    let handoffReason = null;
     while (implText == null && segments < CAP_SEGMENTS) {
       const ho = await relay(`bash "${lib}/handoff.sh" "${id}" ${segments + 1}`, {
         phase: 'Implement', label: `handoff-${id}-${segments + 1}`, retryable: false,
       });
-      if (!ho.ok) break; // чистое дерево — не обрыв: вниз, к обычному park по null
+      if (!ho.ok) { handoffReason = ho.reason || null; break; } // чистое дерево — не обрыв: вниз, к обычному park по null
       segments += 1;
       implText = await agentText(
         `${implPrompt}\n\nПеред началом прочитай ${ho.data.path} — предыдущий агент этой задачи оборван потолком ходов, там что уже сделано. Продолжай с этого места, не переделывай сделанное.`,
@@ -1798,7 +1806,10 @@ async function runOneTask(adv, tasksDone) {
       );
     }
     if (implText == null) {
-      return park(id, boundary, `implementer (cap arm) returned no text after ${segments} segment(s) — either the cap discriminator saw a clean tree (ordinary failure) or ${CAP_SEGMENTS} segments were exhausted`);
+      const why = handoffReason
+        ? `implementer (cap arm) returned no text after ${segments} segment(s); handoff.sh declined to continue: ${handoffReason}`
+        : `implementer (cap arm) returned no text after ${segments} segment(s) — ${CAP_SEGMENTS} segments were exhausted with handoff.sh still returning ok:true each time`;
+      return park(id, boundary, why);
     }
   } else {
     implText = await dispatchAgentText(implPrompt, { model: initialModel, phase: 'Implement', label: `implementer-${id}`, agentType: role });
