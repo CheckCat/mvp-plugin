@@ -66,4 +66,25 @@ if [ $? -ne 0 ]; then
   fail=1
 fi
 
+# (7) находка 4 (финальное ревью) — записи БЕЗ requestId И БЕЗ uuid не
+# должны схлопываться друг с другом: три независимые записи без обоих
+# ключей обязаны считаться тремя уникальными запросами (n=3), а их
+# output_tokens — СУММИРОВАТЬСЯ (5+7+9=21), не max(5,7,9)=9, как было бы
+# при общем ключе None для всех троих.
+cat > "$tmpdir/agent-noid.jsonl" <<'EOF'
+{"type":"assistant","message":{"model":"claude-sonnet-5","usage":{"input_tokens":1,"cache_read_input_tokens":0,"output_tokens":5}}}
+{"type":"assistant","message":{"model":"claude-sonnet-5","usage":{"input_tokens":1,"cache_read_input_tokens":0,"output_tokens":7}}}
+{"type":"assistant","message":{"model":"claude-sonnet-5","usage":{"input_tokens":1,"cache_read_input_tokens":0,"output_tokens":9}}}
+EOF
+out_noid="$(TOKCOST_DIR="$repo_root/scripts/experiments" TOKCOST_PATH="$tmpdir/agent-noid.jsonl" python3 -c '
+import os, sys, json
+sys.path.insert(0, os.environ["TOKCOST_DIR"])
+from tokcost import scan
+agg, n = scan(os.environ["TOKCOST_PATH"])
+v = agg["claude-sonnet-5"]
+print(json.dumps({"n": n, "out": v[4]}))
+')"
+assert_eq "без requestId/uuid: n не схлопнулся" "3" "$(printf '%s' "$out_noid" | python3 -c 'import json,sys; print(json.load(sys.stdin)["n"])')"
+assert_eq "без requestId/uuid: output суммируется, не max()" "21" "$(printf '%s' "$out_noid" | python3 -c 'import json,sys; print(json.load(sys.stdin)["out"])')"
+
 exit $fail
