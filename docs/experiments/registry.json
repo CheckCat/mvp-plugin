@@ -1,0 +1,22 @@
+{ "version": 1, "max_open": 5,
+  "hypotheses": [
+    { "id": "H1-cap-work-preservation",
+      "title": "CAP=30 не теряет работу за швом",
+      "status": "needs-optin", "mode_required": "greedy",
+      "check_script": "scripts/experiments/h1-cap.sh",
+      "threshold": "при >=8 задачах рукава суммарно: доля дошедших до finalize >= контроля, средние dispatches рукава <= контроль*1.53; оба условия -> confirmed, провал первого -> refuted",
+      "ttl_runs": 10, "opened": "2026-09-22",
+      "notes": "capped-копии ролей НЕ штампуются в plugin-lock: check показывает их в derived_unstamped (foreign) — это ожидаемо, гейт не блокирует" },
+    { "id": "H2-tier12-savings-match",
+      "title": "Экономия Tier 1+2 на живом прогоне сходится с реплеем",
+      "status": "open", "mode_required": "passive",
+      "check_script": "scripts/experiments/h2-tier12.sh",
+      "threshold": "медианный первый префикс mvp-reviewer <= 16000 токенов И ни один ladder-диспатч не ушёл на generic workflow-subagent; оба -> confirmed",
+      "ttl_runs": 6, "opened": "2026-09-22" },
+    { "id": "H3-prefix-gap-alive",
+      "title": "Разрыв префикса generic vs ролевой ещё жив (B-M1 не съеден харнессом)",
+      "status": "open", "mode_required": "passive",
+      "check_script": "scripts/experiments/h3-prefix-gap.sh",
+      "threshold": "gap = медиана(generic ctx0) - медиана(ролевой ctx0); gap < 2000 два прогона подряд -> refuted (харнесс догнал, B-M1 избыточен)",
+      "ttl_runs": 12, "opened": "2026-09-22" }
+  ] }
