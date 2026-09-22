@@ -581,7 +581,9 @@ const RELAY_FALLBACK_LOG = 'mvp-relay did not dispatch; relay used a generic fal
 // relayLine(cmd, opts) -> raw last-stdout-line string, unparsed. Relays never
 // receive file contents — only the command to run and a one-line JSON reply
 // back. Used directly (never via relay()'s JSON.parse layer) for commands
-// whose output is not itself JSON: `git rev-parse HEAD`, park()'s git reset.
+// whose output is not itself JSON — today that is exactly one call site:
+// park()'s `git stash push` reset. (`git rev-parse HEAD` шёл здесь раньше,
+// но давно уехал в payload `plan-io next` — relay diet, см. head_sha.)
 //
 // ИНВАРИАНТ (финальное ревью, второй проход): relayLine можно давать только
 // ИДЕМПОТЕНТНЫЕ команды. Узкий mvp-relay-фолбэк внутри — точка, где команда

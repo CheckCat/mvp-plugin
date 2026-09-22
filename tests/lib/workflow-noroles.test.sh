@@ -194,8 +194,13 @@ assert_eq "(F) задача 001 failed" "failed" "$task_status"
 assert_eq "(F) новых коммитов нет" "$n_before" "$(cd "$proj" && git rev-list --count HEAD)"
 [ ! -f "$proj/.mvp/telemetry/events.jsonl" ] \
   || { echo "FAIL: (F) task_complete записан для незавершённой задачи" >&2; fail=1; }
-# park привёл дерево в порядок (вне .mvp — состояние stash'ится)
-dirty_outside="$(cd "$proj" && git status --porcelain | rtk proxy grep -v '\.mvp' || true)"
+# park привёл дерево в порядок (вне .mvp — состояние stash'ится).
+# Обычный grep, ничего сверх bash/node/python3/git (fix round 1: сюда
+# просочился личный CLI-прокси окружения разработчика, и на машине без него
+# || true глотал «команда не найдена» — сравнение «пусто == пусто» проходило
+# при ЛЮБОМ состоянии дерева). || true остаётся легитимно: grep -v без
+# оставшихся строк (всё дерево под .mvp — ожидаемый исход) выходит 1.
+dirty_outside="$(cd "$proj" && git status --porcelain | grep -v '\.mvp' || true)"
 assert_eq "(F) после park вне .mvp чисто" "" "$dirty_outside"
 rm -rf "$proj"
 
