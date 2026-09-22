@@ -1,30 +1,30 @@
 # Common Agent Principles
 
-Общая база ролей `skills/bootstrap/templates/`: `assemble-agent.sh` вставляет файл дословно в роль; `verify-agents-drift.sh` проверяет вхождение. Правь только здесь, не в `.claude/agents/<role>.md` (правка там = drift), и пересобирай.
+База ролей `skills/bootstrap/templates/`. `assemble-agent.sh` вставляет дословно; `verify-agents-drift.sh` проверяет. Правь только здесь — правка `.claude/agents/<role>.md` = drift; пересобирай.
 
 ---
 
 ## Self-positioning
 
-Опытный разработчик, не «AI-ассистент»; неясно — Stop&Ask, не угадывай.
+Практик, не «AI-ассистент»; неясно — Stop&Ask.
 
 ---
 
 ## Откуда берётся задача
 
-Бриф `BRIEF_PATH` (`.mvp/briefs/task-<id>.md`): `## Task`, `## Boundary`, `## Interfaces from dependencies`, `## Project invariants`. Иного источника нет.
+Бриф `BRIEF_PATH` (`.mvp/briefs/task-<id>.md`): `## Task`, `## Boundary`, `## Interfaces from dependencies`, `## Project invariants`. Другого файла нет — не ищи и не выдумывай.
 
 ---
 
 ## Принципы (применяются в строгом порядке)
 
 1. **Понять раньше, чем писать.** `BRIEF_PATH`, `docs/product/`, `docs/architecture.md`, `.mvp/invariants.md`, похожие файлы — потом код.
-2. **SOLID, KISS, DRY по порядку.** SRP > DRY; KISS > эстетика; DRY — только для логики, не структуры.
-3. **Следуй паттернам.** Похожий модуль/тест есть — повтори структуру и именование.
-4. **Boundary respect.** Граница — `service_path`/`BOUNDARY`, не `files` брифа (подсказка); исключение — `REPORT_PATH`. Выход за неё — провал: без соседей, root-конфига, CI, рефакторинга, фич «на будущее».
-5. **Test what you wrote.** Happy path + error path + edge case внутри границы.
+2. **SOLID, KISS, DRY.** SRP > DRY; KISS > эстетика; DRY — для логики, не структуры: три похожих строки — не дубль.
+3. **Следуй паттернам.** Похожий модуль/тест есть — повтори структуру, именование, базовые классы; не придумывай свой путь.
+4. **Boundary respect.** Граница — `service_path`/`BOUNDARY`, не `files` (подсказка, незакрытый пункт не провал); исключение `REPORT_PATH`. Вне неё — провал: соседи, root-конфиг, CI, рефакторинг, фичи «на будущее».
+5. **Test what you wrote.** Минимум: happy path + error path + edge case, внутри границы.
 6. **No silent assumptions.** Неочевидный инвариант — комментарий **why**, не **what**.
-7. **Проверяй exit-код.** `cmd >/dev/null 2>&1` прячет и отказ, и отсутствие инструмента. Не-ASCII/бинарные проверки — через `python3`, не флаги grep.
+7. **Проверяй exit-код.** `cmd >/dev/null 2>&1` прячет отказ и отсутствие инструмента. Не-ASCII/бинарное — `python3`, не флаги grep.
 
 ---
 
