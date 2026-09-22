@@ -113,6 +113,8 @@ mvp-plugin/
 | `review-package.sh <base> <head>` | Дифф+стат+список коммитов в один файл, печатает путь (по образцу SDD). |
 | `save-review.sh <task-id> <label> (<raw-reply>\|--b64 <byteLen>.<base64>)` | Дописывает сырой ответ ревьюера в `.mvp/review/task-<id>.verdicts.md` (по секции на опрос), plain markdown, не JSONL — прозу читает человек. `--b64` — путь для relay-агента, которого просят перепечатать команду дословно: длина+base64 превращает обрыв в передаче в отказ, а не в тихо усечённый файл. Коммитится вместе с задачей через `finalize.sh`. |
 | `state.sh` | Чтение/запись `state.json` (фаза, курсор, clarify-маркер c `pending_critical` и `auto_closed_critical`). Убирает HTML-маркеры в markdown и grep по прозе. |
+| `experiments.sh <list\|check\|add>` (с 2026-09-22) | Реестр самопроверяемых гипотез. `list` — читает `docs/experiments/registry.json` (репо плагина, источник истины) и вычисляет `runs_seen`/`expired_candidate` из `.mvp/experiments/results.jsonl` проекта. `check <run_label>` — зовётся `mvp:retro` Шагом 5: прогоняет check-скрипт (`scripts/experiments/h*.sh`) каждой открытой гипотезы, чей режим совместим с `experiments`-ключом `.mvp/state.json`, дописывает `results.jsonl` (append-only); при `off` ничего не читает и не пишет. `add --json '{...}'` — операторский verb для будущих гипотез (обязателен `threshold` с числом, максимум 5 открытых); ни один скилл его не зовёт. См. `docs/specs/2026-09-22-token-diet-and-experiments-design.md` §7. |
+| `handoff.sh <task_id> <segment>` (с 2026-09-22) | Реконструктор указателя для CAP-эксперимента (greedy-рукав, Tier 3). Зовётся релеем из `skills/build/workflow.mjs`, когда capped-роль (`maxTurns:30`) оборвана потолком ходов: собирает из git-состояния (статус, дифф с потолком по размеру, путь брифа, номер сегмента) файл `.mvp/handoff-<task>.md` — его читает агент-продолжение того же шва. Чистое дерево — это НЕ обрыв (обрыв всегда оставляет правки): `ok:false`, задача паркуется обычным путём, состояние репозитория не меняет никогда. См. `docs/specs/2026-09-22-token-diet-and-experiments-design.md` §9. |
 
 ## 6. Этапы пайплайна
 
@@ -220,7 +222,7 @@ workflow-скрипт не имеет FS-доступа → I/O-агенты (ha
 
 Цикл (~4–5 LLM-вызовов на задачу против ~8–10 в v1):
 
-1. **advance** (haiku-реле): `plan-io.mjs next` атомарно — interrupt-check (файл),
+1. **advance** (`mvp-relay`, haiku-реле): `plan-io.mjs next` атомарно — interrupt-check (файл),
    git-сверка «предыдущая задача закоммичена», выбор ready из DAG, генерация
    `briefs/task-NNN.md` (контракт задачи + report'ы всех depends_on + invariants.md),
    ответ `{task_id, brief_path, boundary, role, model}` или halt-причина
@@ -231,20 +233,46 @@ workflow-скрипт не имеет FS-доступа → I/O-агенты (ha
    `reports/task-NNN.md` (интерфейс-дайджест для будущих зависимых задач); возвращает
    ≤15 строк: статус DONE / DONE_WITH_CONCERNS / BLOCKED / NEEDS_CONTEXT + файлы.
    Предписанные handlers: BLOCKED/NEEDS_CONTEXT → parking с вопросом (не слепой retry).
-3. **validate**: сначала `validate-task.sh` (скрипт). Агент-валидатор (sonnet)
-   вызывается ТОЛЬКО при нарушениях: судит, возвращает `patches[]` для тривиальных
-   фиксов или вердикт. Лестница: patches → apply-patches.py → re-run скрипта →
-   иначе ОДИН implementer-retry (opus, с текстом ошибок) → иначе parking.
-4. **review** (sonnet, обязателен всегда — 44% catch rate в v1): читает
-   review-package + brief; «Do Not Trust the Report»; каждый finding — цитата+file:line;
+3. **validate**: сначала `validate-task.sh` (скрипт). Агент-валидатор (`mvp-validator`,
+   sonnet, потолок 15 ходов — из фронтматтера уже собранной роли; у диспатча самого
+   по себе опции «потолок ходов» нет) вызывается ТОЛЬКО при нарушениях: судит,
+   возвращает `patches[]` для тривиальных фиксов или вердикт. Лестница: patches →
+   apply-patches.py → re-run скрипта → иначе ОДИН implementer-retry (opus, с текстом
+   ошибок) → иначе parking.
+4. **review** (`mvp-reviewer`, sonnet, потолок 15 ходов из фронтматтера роли, обязателен
+   всегда — 44% catch rate в v1): читает review-package + brief; опрашивается
+   `REVIEW_SAMPLES` (3) раз на одном и том же пакете, находки — объединение по всем
+   опросам. Опрос, оборванный потолком ходов роли (ответ без финального сообщения), не
+   голосует — засчитывается «воздержался» (реплика всё равно сохраняется как evidence
+   в `.mvp/review/`); если воздержались все `REVIEW_SAMPLES` опросов, это отдельный
+   halt «ревью не состоялось», а не тихий approve по пустым findings; частичное
+   воздержание уходит в ledger как concern, агрегация вердиктов идёт по оставшимся
+   «живым» опросам. «Do Not Trust the Report»; каждый finding — цитата+file:line;
    блокируют только bug | security | pattern-violation. Лестница: patches → иначе один
    scoped fix-dispatch → scoped re-review (только ADDRESSED/NOT ADDRESSED, новое =
    Out-of-Scope, цикл не продлевает) → иначе parking.
-5. **finalize** (haiku-реле): `plan-io.mjs complete <id> --tokens <delta> && finalize.sh
+5. **finalize** (`mvp-relay`, haiku-реле): `plan-io.mjs complete <id> --tokens <delta> && finalize.sh
    build-task <subject> <msg-file>`: статус, строка ledger
    (`Task 012: complete (commits a1b2..c3d4)`), атомарный коммит код+state, телеметрия
    с реальным ts (скрипты вне песочницы) и per-task дельтой (v1 писал кумулятив и
    единый args.now на весь run).
+
+`mvp-relay`/`mvp-validator`/`mvp-reviewer` — узкие роли механики пайплайна,
+собранные `mvp:bootstrap` без `_common.md` (детали — §4 выше, полная спека —
+`docs/specs/2026-09-22-token-diet-and-experiments-design.md`).
+
+**CAP-рукав** (эксперимент, только режим `experiments: greedy` и только если
+для роли задачи собрана `<role>-capped.md`, потолок 30 ходов): к задачам
+чётного среза текущего прогона (по номеру исполнения, считая с нуля) шаг 2
+диспатчит имплементера этой capped-ролью вместо обычной — задачи нечётного
+среза остаются контролем, без изменений. Обрыв потолком ходов на грязном
+дереве — не отказ: `lib/handoff.sh` собирает из git-состояния указатель
+(«что уже сделано»), та же capped-роль продолжает с этого места (до 4
+сегментов на задачу), дальше — обычный parking; чистое дерево при обрыве —
+это НЕ потолок, обычная обработка отказа. Рукав никогда не добавляет ни
+второго прогона Workflow, ни второй задачи в план — только меняет параметры
+диспатчей задач, которые и так исполняются в этом прогоне. Решающие правила
+гипотезы H1 и полная механика — `docs/specs/2026-09-22-token-diet-and-experiments-design.md` §8–9.
 
 **Parking** (закрывает каскадную дыру v1): `git checkout -- <boundary>` + unstage +
 `Ruling:`/`Parked:` в ledger + blockers.md → halt stop-and-ask. Дерево чистое.

@@ -57,10 +57,12 @@ CONFIRMED дискуссией; спека определяет, как их в�
 `planned_role`. `assemble-agent.sh` штампует их в plugin-lock как derived —
 механизм уже есть, `mvp:sync` подхватывает без правок.
 
-`workflow.mjs`: диспатчи ревьюера/валидатора/re-review (`:1046`, `:1117`,
-`:1249`, `:1326`, `:1421`) и `callOpts` обоих релеев (`relay()` `:645`,
-`relayLine()` `:544`) получают `agentType: "mvp-reviewer" | "mvp-validator" |
-"mvp-relay"`. Больше в диспатчах не меняется ничего.
+`workflow.mjs`: диспатчи ревьюера/re-review — внутри `runReviewLadder()`
+(опрос, ретрай на неразборчивом FINDINGS, re-review после fix); валидатора —
+внутри `runValidateLadder()`; `callOpts` обоих релеев — внутри `relay()` и
+`relayLine()` (литерал `agentType: 'mvp-relay'` в каждой). Все получают
+`agentType: "mvp-reviewer" | "mvp-validator" | "mvp-relay"`. Больше в
+диспатчах не меняется ничего.
 
 Важно про регистрацию: агенты читаются харнессом на старте сессии. После
 bootstrap/sync с новыми ролями прогон `mvp:build` требует новой сессии — это
@@ -160,8 +162,9 @@ Stop&Ask/blockers.md — три задачи trellis прошли ревью к�
    Файла capped-роли нет (флаг включили после bootstrap, sync не гоняли) →
    рукав молча неактивен, вся задача идёт контролем — рукав никогда не
    диспатчит несуществующую роль.
-3. Ветка-дискриминатор в `runOneTask` (`:1710–1748`): результат имплементера
-   null/без STATUS **и** `git status` непуст → это обрыв по потолку, не отказ:
+3. Ветка-дискриминатор в `runOneTask` (вокруг локальной константы
+   `CAP_SEGMENTS`): результат имплементера null/без STATUS **и** `git status`
+   непуст → это обрыв по потолку, не отказ:
    `lib/handoff.sh` (новый) собирает указатель — `git status --short`,
    `git diff` (cap по размеру), путь брифа, номер сегмента — в
    `.mvp/handoff-<task>.md`, и диспатчится продолжение той же capped-ролью
