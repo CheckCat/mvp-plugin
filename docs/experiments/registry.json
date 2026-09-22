@@ -6,7 +6,7 @@
       "check_script": "scripts/experiments/h1-cap.sh",
       "threshold": "при >=8 задачах рукава суммарно: доля дошедших до finalize >= контроля, средние dispatches рукава <= контроль*1.53; оба условия -> confirmed, провал первого -> refuted",
       "ttl_runs": 10, "opened": "2026-09-22",
-      "notes": "capped-копии ролей НЕ штампуются в plugin-lock: check показывает их в derived_unstamped (foreign) — это ожидаемо, гейт не блокирует" },
+      "notes": "capped-копии ролей НЕ штампуются в plugin-lock: check показывает их в derived_unstamped (foreign) — это ожидаемо, гейт не блокирует. ЧТО ЗНАЧИТ confirmed (fix round 1, Finding 1): только то, что у задач, ДОШЕДШИХ до task_complete, диспатчи рукава не больше 1.53x контроля (при n_arm>=8, n_control>=4). Задача, которую рукав тихо потерял — упёрлась, запарковалась, осталась status=failed в .mvp/plan.json — событие task_complete не порождает вовсе и в эту арифметику не попадает; check-скрипт поэтому НЕ выносит confirmed, если план прогона содержит failed-задачу (уходит в null) — но это страховка на одну известную дыру, не гарантия полноты" },
     { "id": "H2-tier12-savings-match",
       "title": "Экономия Tier 1+2 на живом прогоне сходится с реплеем",
       "status": "open", "mode_required": "passive",

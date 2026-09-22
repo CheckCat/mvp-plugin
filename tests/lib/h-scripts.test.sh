@@ -36,6 +36,35 @@ for i in 1 2 3 4 5 6 7 8; do echo "{\"event\":\"task_complete\",\"task\":\"c$i\"
 out="$(run_h h1-cap.sh)"
 assert_eq "h1 дорогой рукав: не confirmed" "None" "$(jd "$out" 'd["data"]["verdict"]')"
 
+# --- H1 Finding 2: MIN_CONTROL=4 — n_control=3 недостаточно (шум выдаваемый
+# за контроль), n_control=4 (порог) уже позволяет вынести вердикт.
+: > .mvp/telemetry/events.jsonl
+for i in 1 2 3 4 5 6 7 8; do echo "{\"event\":\"task_complete\",\"task\":\"m$i\",\"delta_tokens\":10,\"dispatches\":8,\"arm\":\"cap30\",\"segments\":1,\"ts\":\"t\"}" >> .mvp/telemetry/events.jsonl; done
+for i in 1 2 3; do echo "{\"event\":\"task_complete\",\"task\":\"n$i\",\"delta_tokens\":10,\"dispatches\":9,\"arm\":\"control\",\"ts\":\"t\"}" >> .mvp/telemetry/events.jsonl; done
+out="$(run_h h1-cap.sh)"
+assert_eq "h1 n_control=3 < MIN_CONTROL(4): verdict null" "None" "$(jd "$out" 'd["data"]["verdict"]')"
+assert_eq "h1 n_control=3: reason называет недостаточность" "True" "$(jd "$out" '"недостаточно контрольных" in d["reason"]')"
+echo "{\"event\":\"task_complete\",\"task\":\"n4\",\"delta_tokens\":10,\"dispatches\":9,\"arm\":\"control\",\"ts\":\"t\"}" >> .mvp/telemetry/events.jsonl
+out="$(run_h h1-cap.sh)"
+assert_eq "h1 n_control=4 (порог достигнут): confirmed" "confirmed" "$(jd "$out" 'd["data"]["verdict"]')"
+assert_eq "h1 confirmed: reason содержит числа" "True" "$(jd "$out" '"mean_disp_arm" in d["reason"]')"
+
+# --- H1 Finding 1: failed-задача в .mvp/plan.json — страховка. confirmed
+# понижается до null (потерянная рукавом задача не видна метрике dispatches),
+# refuted страховка не трогает (отрицательный вывод не пострадал бы всё равно).
+cat > .mvp/plan.json <<'EOF'
+{"tasks":[{"id":"001","status":"failed"},{"id":"002","status":"done"}]}
+EOF
+out="$(run_h h1-cap.sh)"
+assert_eq "h1 failed-задача блокирует confirmed" "None" "$(jd "$out" 'd["data"]["verdict"]')"
+assert_eq "h1 failed-задача: reason упоминает failed" "True" "$(jd "$out" '"failed" in d["reason"]')"
+: > .mvp/telemetry/events.jsonl
+for i in 1 2 3 4 5 6 7 8; do echo "{\"event\":\"task_complete\",\"task\":\"p$i\",\"delta_tokens\":10,\"dispatches\":30,\"arm\":\"cap30\",\"segments\":3,\"ts\":\"t\"}" >> .mvp/telemetry/events.jsonl; done
+for i in 1 2 3 4; do echo "{\"event\":\"task_complete\",\"task\":\"q$i\",\"delta_tokens\":10,\"dispatches\":9,\"arm\":\"control\",\"ts\":\"t\"}" >> .mvp/telemetry/events.jsonl; done
+out="$(run_h h1-cap.sh)"
+assert_eq "h1 failed-задача НЕ блокирует refuted" "refuted" "$(jd "$out" 'd["data"]["verdict"]')"
+rm -f .mvp/plan.json
+
 # --- H2/H3: без JOURNALS_DIR — ok:true, verdict null, note
 out="$(run_h h2-tier12.sh)"
 assert_eq "h2 без журналов ok" "True" "$(jd "$out" 'd["ok"]')"
@@ -80,7 +109,8 @@ out="$(JOURNALS_DIR="$(pwd)/j2" HYP_ID=t RUN_LABEL=r RESULTS_PATH=.mvp/experimen
 # generic (b1) = 100+5000+900 = 6000; role (b2) = 50+2000+450 = 2500; gap = 3500
 assert_eq "h3 gap (cache_read != output, различает формулу)" "3500" "$(jd "$out" 'd["data"]["value"]["gap"]')"
 
-# --- H2 с JOURNALS_DIR: median_reviewer_prefix и verdict по числовым порогам
+# --- H2 с JOURNALS_DIR: median_reviewer_prefix и verdict по числовым порогам.
+# MIN_OBS=3 (Finding 3) — три mvp-reviewer журнала, ровно на пороге.
 mkdir -p j3
 cat > j3/agent-r1.meta.json <<'EOF'
 {"agentType":"mvp-reviewer"}
@@ -94,15 +124,41 @@ EOF
 cat > j3/agent-r2.jsonl <<'EOF'
 {"type":"assistant","requestId":"r2","message":{"model":"m","usage":{"input_tokens":0,"cache_creation_input_tokens":14000,"cache_read_input_tokens":0,"output_tokens":1}}}
 EOF
+cat > j3/agent-r3.meta.json <<'EOF'
+{"agentType":"mvp-reviewer"}
+EOF
+cat > j3/agent-r3.jsonl <<'EOF'
+{"type":"assistant","requestId":"r3","message":{"model":"m","usage":{"input_tokens":0,"cache_creation_input_tokens":12000,"cache_read_input_tokens":0,"output_tokens":1}}}
+EOF
 out="$(JOURNALS_DIR="$(pwd)/j3" HYP_ID=t RUN_LABEL=r RESULTS_PATH=.mvp/experiments/results.jsonl PLUGIN_ROOT="$repo_root" PROJECT_ROOT="$(pwd)" bash "$repo_root/scripts/experiments/h2-tier12.sh" | tail -n 1)"
-# median(10000, 14000) = 12000 <= 16000, нет generic — confirmed
-assert_eq "h2 с журналами: median" "12000.0" "$(jd "$out" 'd["data"]["value"]["median_reviewer_prefix"]')"
+# median(10000, 12000, 14000) = 12000 <= 16000, нет generic, n=3=MIN_OBS — confirmed
+assert_eq "h2 с журналами: median" "12000" "$(jd "$out" 'd["data"]["value"]["median_reviewer_prefix"]')"
 assert_eq "h2 с журналами: generic_ladder_agents" "0" "$(jd "$out" 'd["data"]["value"]["generic_ladder_agents"]')"
 assert_eq "h2 с журналами: confirmed" "confirmed" "$(jd "$out" 'd["data"]["verdict"]')"
+assert_eq "h2 confirmed: reason содержит числа" "True" "$(jd "$out" '"median_reviewer_prefix" in d["reason"]')"
 
-# --- H2 с генериком в лестнице: даже при хорошей медиане generic_ladder_agents>0 блокирует confirmed
+# --- H2 Finding 3, граница снизу: n_reviewer=2 (MIN_OBS-1) — те же «хорошие»
+# значения (median<=16000, нет generic), но вердикт всё равно null.
+mkdir -p j7
+cat > j7/agent-r1.meta.json <<'EOF'
+{"agentType":"mvp-reviewer"}
+EOF
+cat > j7/agent-r1.jsonl <<'EOF'
+{"type":"assistant","requestId":"r1","message":{"model":"m","usage":{"input_tokens":0,"cache_creation_input_tokens":10000,"cache_read_input_tokens":0,"output_tokens":1}}}
+EOF
+cat > j7/agent-r2.meta.json <<'EOF'
+{"agentType":"mvp-reviewer"}
+EOF
+cat > j7/agent-r2.jsonl <<'EOF'
+{"type":"assistant","requestId":"r2","message":{"model":"m","usage":{"input_tokens":0,"cache_creation_input_tokens":12000,"cache_read_input_tokens":0,"output_tokens":1}}}
+EOF
+out="$(JOURNALS_DIR="$(pwd)/j7" HYP_ID=t RUN_LABEL=r RESULTS_PATH=.mvp/experiments/results.jsonl PLUGIN_ROOT="$repo_root" PROJECT_ROOT="$(pwd)" bash "$repo_root/scripts/experiments/h2-tier12.sh" | tail -n 1)"
+assert_eq "h2 n_reviewer=2 < MIN_OBS(3): verdict null несмотря на хорошие числа" "None" "$(jd "$out" 'd["data"]["verdict"]')"
+assert_eq "h2 n_reviewer=2: reason называет недостаточность" "True" "$(jd "$out" '"недостаточно наблюдений" in d["reason"]')"
+
+# --- H2 с генериком в лестнице: даже при хорошей медиане (n=3=MIN_OBS) generic_ladder_agents>0 блокирует confirmed
 mkdir -p j4
-cp j3/agent-r1.meta.json j3/agent-r1.jsonl j3/agent-r2.meta.json j3/agent-r2.jsonl j4/
+cp j3/agent-r1.meta.json j3/agent-r1.jsonl j3/agent-r2.meta.json j3/agent-r2.jsonl j3/agent-r3.meta.json j3/agent-r3.jsonl j4/
 cat > j4/agent-g1.meta.json <<'EOF'
 {"agentType":"workflow-subagent"}
 EOF
@@ -113,16 +169,29 @@ out="$(JOURNALS_DIR="$(pwd)/j4" HYP_ID=t RUN_LABEL=r RESULTS_PATH=.mvp/experimen
 assert_eq "h2 generic в лестнице: не confirmed" "None" "$(jd "$out" 'd["data"]["verdict"]')"
 assert_eq "h2 generic в лестнице: generic_ladder_agents" "1" "$(jd "$out" 'd["data"]["value"]["generic_ladder_agents"]')"
 
-# --- H2 refuted: медиана > 24000
+# --- H2 refuted: медиана > 24000, n=3=MIN_OBS
 mkdir -p j5
 cat > j5/agent-r1.meta.json <<'EOF'
 {"agentType":"mvp-reviewer"}
 EOF
 cat > j5/agent-r1.jsonl <<'EOF'
-{"type":"assistant","requestId":"r1","message":{"model":"m","usage":{"input_tokens":0,"cache_creation_input_tokens":30000,"cache_read_input_tokens":0,"output_tokens":1}}}
+{"type":"assistant","requestId":"r1","message":{"model":"m","usage":{"input_tokens":0,"cache_creation_input_tokens":28000,"cache_read_input_tokens":0,"output_tokens":1}}}
+EOF
+cat > j5/agent-r2.meta.json <<'EOF'
+{"agentType":"mvp-reviewer"}
+EOF
+cat > j5/agent-r2.jsonl <<'EOF'
+{"type":"assistant","requestId":"r2","message":{"model":"m","usage":{"input_tokens":0,"cache_creation_input_tokens":30000,"cache_read_input_tokens":0,"output_tokens":1}}}
+EOF
+cat > j5/agent-r3.meta.json <<'EOF'
+{"agentType":"mvp-reviewer"}
+EOF
+cat > j5/agent-r3.jsonl <<'EOF'
+{"type":"assistant","requestId":"r3","message":{"model":"m","usage":{"input_tokens":0,"cache_creation_input_tokens":32000,"cache_read_input_tokens":0,"output_tokens":1}}}
 EOF
 out="$(JOURNALS_DIR="$(pwd)/j5" HYP_ID=t RUN_LABEL=r RESULTS_PATH=.mvp/experiments/results.jsonl PLUGIN_ROOT="$repo_root" PROJECT_ROOT="$(pwd)" bash "$repo_root/scripts/experiments/h2-tier12.sh" | tail -n 1)"
 assert_eq "h2 refuted (медиана 30000 > 24000)" "refuted" "$(jd "$out" 'd["data"]["verdict"]')"
+assert_eq "h2 refuted: reason содержит числа" "True" "$(jd "$out" '"median_reviewer_prefix" in d["reason"]')"
 
 # --- H1 mean_segments считается по рукаву (8 событий segments:1 из confirmed-кейса выше остались в events.jsonl)
 out="$(run_h h1-cap.sh)"
@@ -138,26 +207,65 @@ out="$(run_h h1-cap.sh)"
 assert_eq "h1 mean_segments игнорирует событие без поля segments" "2.0" "$(jd "$out" 'd["data"]["value"]["mean_segments"]')"
 assert_eq "h1 n_arm считает и событие без segments" "8" "$(jd "$out" 'd["data"]["value"]["n_arm"]')"
 
-# --- H3 refuted: два прогона подряд с gap < 2000 в results.jsonl
-mkdir -p j6
-cat > j6/agent-c1.meta.json <<'EOF'
+# results.jsonl получает «предыдущий прогон» этой гипотезы с gap<2000 —
+# нужен ниже и для граничного (недостаточно), и для достаточного кейса.
+echo '{"hypothesis":"t","run_label":"r0","value":{"gap":500},"verdict":null,"ts":"t"}' >> .mvp/experiments/results.jsonl
+
+# --- H3 Finding 3, граница снизу: 2 generic + 2 mvp- (MIN_OBS-1 по каждой
+# группе) — gap<2000 и подходящий предыдущий прогон есть, но данных мало →
+# verdict остаётся null (не refuted).
+mkdir -p j9
+cat > j9/agent-c1.meta.json <<'EOF'
 {"agentType":"workflow-subagent"}
 EOF
-cat > j6/agent-c1.jsonl <<'EOF'
+cat > j9/agent-c1.jsonl <<'EOF'
 {"type":"assistant","requestId":"c1","message":{"model":"m","usage":{"input_tokens":0,"cache_creation_input_tokens":5000,"cache_read_input_tokens":0,"output_tokens":1}}}
 EOF
-cat > j6/agent-c2.meta.json <<'EOF'
+cat > j9/agent-c1b.meta.json <<'EOF'
+{"agentType":"workflow-subagent"}
+EOF
+cat > j9/agent-c1b.jsonl <<'EOF'
+{"type":"assistant","requestId":"c1b","message":{"model":"m","usage":{"input_tokens":0,"cache_creation_input_tokens":5000,"cache_read_input_tokens":0,"output_tokens":1}}}
+EOF
+cat > j9/agent-c2.meta.json <<'EOF'
 {"agentType":"mvp-relay"}
 EOF
-cat > j6/agent-c2.jsonl <<'EOF'
+cat > j9/agent-c2.jsonl <<'EOF'
 {"type":"assistant","requestId":"c2","message":{"model":"m","usage":{"input_tokens":0,"cache_creation_input_tokens":4500,"cache_read_input_tokens":0,"output_tokens":1}}}
 EOF
-# gap = 5000-4500 = 500 < 2000; results.jsonl ещё не содержит предыдущей записи H3 → verdict null
-echo '{"hypothesis":"t","run_label":"r0","value":{"gap":500},"verdict":null,"ts":"t"}' >> .mvp/experiments/results.jsonl
+cat > j9/agent-c2b.meta.json <<'EOF'
+{"agentType":"mvp-relay"}
+EOF
+cat > j9/agent-c2b.jsonl <<'EOF'
+{"type":"assistant","requestId":"c2b","message":{"model":"m","usage":{"input_tokens":0,"cache_creation_input_tokens":4500,"cache_read_input_tokens":0,"output_tokens":1}}}
+EOF
+out="$(JOURNALS_DIR="$(pwd)/j9" HYP_ID=t RUN_LABEL=r RESULTS_PATH=.mvp/experiments/results.jsonl PLUGIN_ROOT="$repo_root" PROJECT_ROOT="$(pwd)" bash "$repo_root/scripts/experiments/h3-prefix-gap.sh" | tail -n 1)"
+assert_eq "h3 2+2 наблюдений (< MIN_OBS=3): gap всё равно посчитан как факт" "500.0" "$(jd "$out" 'd["data"]["value"]["gap"]')"
+assert_eq "h3 2+2 наблюдений: verdict null несмотря на gap<2000 и подходящий prev" "None" "$(jd "$out" 'd["data"]["verdict"]')"
+assert_eq "h3 2+2 наблюдений: reason называет недостаточность" "True" "$(jd "$out" '"недостаточно наблюдений" in d["reason"]')"
+
+# --- H3 refuted: 3 generic + 3 mvp- (MIN_OBS достигнут по обеим группам),
+# два прогона подряд с gap < 2000 в results.jsonl
+mkdir -p j6
+cp j9/agent-c1.meta.json j9/agent-c1.jsonl j9/agent-c1b.meta.json j9/agent-c1b.jsonl j9/agent-c2.meta.json j9/agent-c2.jsonl j9/agent-c2b.meta.json j9/agent-c2b.jsonl j6/
+cat > j6/agent-c1c.meta.json <<'EOF'
+{"agentType":"workflow-subagent"}
+EOF
+cat > j6/agent-c1c.jsonl <<'EOF'
+{"type":"assistant","requestId":"c1c","message":{"model":"m","usage":{"input_tokens":0,"cache_creation_input_tokens":5000,"cache_read_input_tokens":0,"output_tokens":1}}}
+EOF
+cat > j6/agent-c2c.meta.json <<'EOF'
+{"agentType":"mvp-relay"}
+EOF
+cat > j6/agent-c2c.jsonl <<'EOF'
+{"type":"assistant","requestId":"c2c","message":{"model":"m","usage":{"input_tokens":0,"cache_creation_input_tokens":4500,"cache_read_input_tokens":0,"output_tokens":1}}}
+EOF
+# generic median(5000,5000,5000)=5000; role median(4500,4500,4500)=4500; gap=500<2000
 out="$(JOURNALS_DIR="$(pwd)/j6" HYP_ID=t RUN_LABEL=r RESULTS_PATH=.mvp/experiments/results.jsonl PLUGIN_ROOT="$repo_root" PROJECT_ROOT="$(pwd)" bash "$repo_root/scripts/experiments/h3-prefix-gap.sh" | tail -n 1)"
 assert_eq "h3 refuted: gap" "500" "$(jd "$out" 'd["data"]["value"]["gap"]')"
-assert_eq "h3 refuted: предыдущий прогон тоже <2000 → refuted" "refuted" "$(jd "$out" 'd["data"]["verdict"]')"
-# без предыдущей записи (чужой HYP_ID) — тот же текущий gap<2000, но одного прогона мало
+assert_eq "h3 refuted: 3+3 наблюдений, предыдущий прогон тоже <2000 → refuted" "refuted" "$(jd "$out" 'd["data"]["verdict"]')"
+assert_eq "h3 refuted: reason содержит числа" "True" "$(jd "$out" '"gap=" in d["reason"]')"
+# без предыдущей записи (чужой HYP_ID) — тот же текущий gap<2000, наблюдений хватает, но одного прогона мало
 out="$(JOURNALS_DIR="$(pwd)/j6" HYP_ID=other RUN_LABEL=r RESULTS_PATH=.mvp/experiments/results.jsonl PLUGIN_ROOT="$repo_root" PROJECT_ROOT="$(pwd)" bash "$repo_root/scripts/experiments/h3-prefix-gap.sh" | tail -n 1)"
 assert_eq "h3 один прогон с малым gap, нет своей предыдущей записи → null" "None" "$(jd "$out" 'd["data"]["verdict"]')"
 

@@ -76,20 +76,44 @@ for jsonl_path in sorted(glob.glob(os.path.join(journals_dir, "agent-*.jsonl")))
             reviewer_prefixes.append(p)
 
 median_reviewer_prefix = statistics.median(reviewer_prefixes) if reviewer_prefixes else None
+n_reviewer = len(reviewer_prefixes)
+
+# Fix round 1, Finding 3: без минимума одного журнала достаточно для
+# уверенного вердикта — медиана тогда просто пересказывает единственный
+# файл. MIN_OBS=3 — минимум, при котором медиана перестаёт быть средним
+# пары или значением одного файла и становится настоящим средним по рангу
+# элементом, испытывающим влияние обоих соседей.
+MIN_OBS = 3
 
 verdict = None
 reason = None
 if median_reviewer_prefix is None:
     reason = "нет журналов agentType=mvp-reviewer в JOURNALS_DIR — медиану посчитать не из чего"
+elif n_reviewer < MIN_OBS:
+    reason = (
+        "недостаточно наблюдений: agentType=mvp-reviewer журналов %d < %d — "
+        "медиана по такой выборке пересказывает один-два файла, а не "
+        "распределение, вердикт откладывается" % (n_reviewer, MIN_OBS)
+    )
 elif median_reviewer_prefix <= 16000 and generic_count == 0:
     verdict = "confirmed"
+    reason = (
+        "median_reviewer_prefix=%.0f <= 16000 и generic_ladder_agents=0 "
+        "по %d mvp-reviewer журналам — диета Tier1+2 подтверждается"
+        % (median_reviewer_prefix, n_reviewer)
+    )
 elif median_reviewer_prefix > 24000:
     verdict = "refuted"
+    reason = (
+        "median_reviewer_prefix=%.0f > 24000 по %d mvp-reviewer журналам — "
+        "диета не сработала" % (median_reviewer_prefix, n_reviewer)
+    )
 else:
     reason = (
-        "median_reviewer_prefix=%.0f, generic_ladder_agents=%d — не "
-        "укладываются ни в confirmed (<=16000 и 0 generic), ни в "
-        "refuted (>24000)" % (median_reviewer_prefix, generic_count)
+        "median_reviewer_prefix=%.0f, generic_ladder_agents=%d по %d "
+        "mvp-reviewer журналам — не укладываются ни в confirmed (<=16000 и "
+        "0 generic), ни в refuted (>24000)"
+        % (median_reviewer_prefix, generic_count, n_reviewer)
     )
 
 value = {"median_reviewer_prefix": median_reviewer_prefix, "generic_ladder_agents": generic_count}

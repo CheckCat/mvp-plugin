@@ -80,22 +80,37 @@ for jsonl_path in sorted(glob.glob(os.path.join(journals_dir, "agent-*.jsonl")))
     elif agent_type.startswith("mvp-"):
         role_prefixes.append(p)
 
+# Fix round 1, Finding 3: MIN_OBS — та же логика, что и в h2-tier12.sh:
+# 1-2 наблюдения делают медиану пересказом одного-двух файлов, не
+# распределения. Ниже порога gap продолжает считаться и репортится (число
+# как факт есть), но verdict не выносится.
+MIN_OBS = 3
+n_generic = len(generic_prefixes)
+n_role = len(role_prefixes)
+
+gap = None
 reason = None
 if not generic_prefixes:
-    gap = None
     reason = (
         "generic'ов (agentType=workflow-subagent) в JOURNALS_DIR нет — после "
         "Tier 1 они исчезают из лестницы, гипотеза кормится только "
         "SDD/Task-агентами сессий, где generic ещё жив"
     )
 elif not role_prefixes:
-    gap = None
     reason = "нет журналов agentType, начинающегося с mvp- — сравнивать generic не с чем"
 else:
     gap = statistics.median(generic_prefixes) - statistics.median(role_prefixes)
 
 verdict = None
-if gap is not None and gap < 2000:
+if gap is None:
+    pass  # reason уже объясняет отсутствующую группу
+elif n_generic < MIN_OBS or n_role < MIN_OBS:
+    reason = (
+        "недостаточно наблюдений: generic=%d, mvp-=%d журналов, порог %d по "
+        "каждой группе — медиана ненадёжна, вердикт откладывается (gap=%.0f "
+        "посчитан как факт, но не решает)" % (n_generic, n_role, MIN_OBS, gap)
+    )
+elif gap < 2000:
     prev_gap = None
     try:
         with open(results_path, errors="replace") as fh:
@@ -113,6 +128,18 @@ if gap is not None and gap < 2000:
         pass
     if prev_gap is not None and prev_gap < 2000:
         verdict = "refuted"
+        reason = (
+            "gap=%.0f < 2000 и предыдущий прогон тоже gap=%.0f < 2000 — два "
+            "подряд, харнесс догнал разрыв, B-M1 избыточен" % (gap, prev_gap)
+        )
+    else:
+        reason = (
+            "gap=%.0f < 2000, но предыдущего прогона этой гипотезы с gap<2000 "
+            "нет (prev_gap=%s) — нужен ещё один такой прогон подряд"
+            % (gap, prev_gap)
+        )
+else:
+    reason = "gap=%.0f >= 2000 — разрыв ещё жив, харнесс его не съел" % gap
 
 print(json.dumps({"ok": True, "reason": reason, "hint": None,
                   "data": {"value": {"gap": gap}, "verdict": verdict}}))
