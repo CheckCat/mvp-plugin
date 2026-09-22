@@ -54,6 +54,25 @@
 #   вместо содержимого. Общий потолок (DIFF_CAP/BYTES_CAP) остаётся вторым
 #   рубежом поверх — на случай когда много мелких файлов вместе всё равно
 #   превышают бюджет.
+#
+# Round 4 fix (финальное ревью ветки, находки 1 и 3):
+#   A (important) — самовключение: `git ls-files --others` захватывает и
+#     .mvp/** — а там лежит ПРЕДЫДУЩИЙ указатель этого же задания
+#     (.mvp/handoff-<task>.md), бриф задачи, незакоммиченные отчёты. На
+#     втором сегменте скрипт инлайнил их как untracked-контент — указатель
+#     встраивал сам себя, сжигая бюджет на дубли. Тот же класс бага уже был
+#     пойман в lib/review-package.sh (см. её заголовочный коммент про
+#     self-inclusion) — здесь унаследовано то же решение: .mvp/** исключён
+#     из untracked-встраивания целиком, до всех остальных фильтров (bin/
+#     large). git status --short для .mvp/** не фильтруется отдельно — это
+#     обычно один схлопнутый untracked-каталог ("?? .mvp/") или несколько
+#     СТРОК статуса, не содержимое; проблема только в инлайне содержимого.
+#   B (minor) — у секций «git status --short» и «список untracked-путей»
+#     не было СВОИХ потолков (только у диффа+untracked-контента: DIFF_CAP/
+#     BYTES_CAP). Дерево с тысячами untracked-путей (например: неигнорируемый
+#     каталог сборки) раздувало указатель мимо всех ограничений через эти
+#     две секции. Добавлены STATUS_CAP/UNTRACKED_LIST_CAP (строк) с той же
+#     видимой пометкой обрезки, что уже есть у диффа.
 set -u
 
 # emit_result <ok:true|false> <reason> <hint> <data-json-or-empty>
@@ -99,6 +118,14 @@ FILE_CAP=51200      # 50KB — потолок на ОТДЕЛЬНЫЙ untracked-
                     # выбор, что уже был обоснован в round 1 для этой роли
                     # (оставляет место под обвязку/другие файлы, не даёт
                     # одному артефакту съесть весь бюджет до общего среза)
+STATUS_CAP=500          # строк — потолок секции `git status --short` (round 4
+                        # fix B: без него дерево с тысячами путей раздувает
+                        # указатель мимо DIFF_CAP/BYTES_CAP, у которых эта
+                        # секция вообще не в области действия)
+UNTRACKED_LIST_CAP=500  # строк — потолок секции «список untracked-путей»
+                        # (тот же класс проблемы, что у STATUS_CAP выше;
+                        # содержимое untracked-файлов режется отдельно —
+                        # FILE_CAP/DIFF_CAP/BYTES_CAP — это только ИМЕНА)
 
 status="$(git status --porcelain 2>/dev/null)" || {
   emit_result false "not a git repo" "" ""
@@ -144,6 +171,7 @@ BUILD_JSON="$(
   HO_STATUS_FILE="$work/status.txt" HO_DIFF_FILE="$work/diff.txt" \
   HO_UNTRACKED_FILE="$work/untracked.nul" \
   HO_DIFF_CAP="$DIFF_CAP" HO_BYTES_CAP="$BYTES_CAP" HO_FILE_CAP="$FILE_CAP" \
+  HO_STATUS_CAP="$STATUS_CAP" HO_UNTRACKED_LIST_CAP="$UNTRACKED_LIST_CAP" \
   python3 - <<'PY'
 import json, os, sys, tempfile
 
@@ -171,6 +199,15 @@ def truncate_text_safely(text, cap_bytes):
     return data[:cap_bytes].decode("utf-8", errors="ignore"), True
 
 
+def truncate_lines(items, cap):
+    # Round 4 fix B: тот же приём, что truncate_text_safely, но по числу
+    # строк/элементов списка, а не по байтам — для секций, у которых
+    # единица измерения "одна строка/один путь", не "поток текста".
+    if len(items) <= cap:
+        return items, False
+    return items[:cap], True
+
+
 try:
     task = os.environ["HO_TASK"]
     seg = int(os.environ["HO_SEG"])
@@ -180,6 +217,8 @@ try:
     diff_cap = int(os.environ["HO_DIFF_CAP"])
     bytes_cap = int(os.environ["HO_BYTES_CAP"])
     file_cap = int(os.environ["HO_FILE_CAP"])
+    status_cap = int(os.environ["HO_STATUS_CAP"])
+    untracked_list_cap = int(os.environ["HO_UNTRACKED_LIST_CAP"])
 
     with open(os.environ["HO_STATUS_FILE"], encoding="utf-8", errors="replace") as fh:
         status_text = fh.read()
@@ -188,6 +227,16 @@ try:
     with open(os.environ["HO_UNTRACKED_FILE"], "rb") as fh:
         raw = fh.read()
     untracked = [p.decode("utf-8", "replace") for p in raw.split(b"\x00") if p]
+
+    # Round 4 fix A — самовключение: .mvp/** несёт ПРЕДЫДУЩИЙ указатель этого
+    # же задания (.mvp/handoff-<task>.md), бриф, незакоммиченные отчёты —
+    # git ls-files --others их видит как untracked. Без исключения второй
+    # сегмент инлайнил бы их как содержимое untracked-файлов, встраивая
+    # указатель сам в себя. Тот же класс бага и то же решение, что в
+    # lib/review-package.sh (см. её заголовочный коммент про self-inclusion).
+    # Фильтр — ДО эмбеддинга и ДО отображаемого списка путей, единой точкой.
+    STATE_PREFIX = ".mvp/"
+    untracked = [p for p in untracked if p != ".mvp" and not p.startswith(STATE_PREFIX)]
 
     parts = [diff_text]
     skipped_binary = []
@@ -237,15 +286,27 @@ try:
     diff_output, byte_truncated = truncate_text_safely(diff_output, bytes_cap)
     truncated = truncated or byte_truncated
 
+    # Round 4 fix B: у секций "git status" и "список untracked-путей" не было
+    # СВОИХ потолков — дерево с тысячами путей раздувало указатель мимо
+    # DIFF_CAP/BYTES_CAP, которые эту пару секций вообще не ограничивают.
+    # Список для эмбеддинга (`untracked`, цикл выше) остаётся ПОЛНЫМ — режется
+    # только его текстовое ОТОБРАЖЕНИЕ ниже, содержимого файлов это не касается.
+    status_lines, status_truncated = truncate_lines(status_text.splitlines(), status_cap)
+    untracked_display, untracked_list_truncated = truncate_lines(untracked, untracked_list_cap)
+
     body = [
         "# Handoff pointer — task %s, segment: %d" % (task, seg),
         "",
         "Предыдущий агент этой задачи оборван потолком ходов. Ниже — что уже",
         "сделано в рабочем дереве (НЕ переделывай это заново):",
         "",
-        "## git status --short",
+        "## git status --short (потолок %d строк)" % status_cap,
         "```",
-        status_text.rstrip("\n"),
+        "\n".join(status_lines),
+    ]
+    if status_truncated:
+        body.append("[TRUNCATED — смотри полное состояние: git status --short]")
+    body += [
         "```",
         "",
         "## git diff HEAD + untracked-файлы (потолок %d строк / %d байт)" % (diff_cap, bytes_cap),
@@ -257,9 +318,13 @@ try:
     body += [
         "```",
         "",
-        "## Untracked-файлы (созданы предыдущим сегментом)",
+        "## Untracked-файлы (созданы предыдущим сегментом, потолок %d строк)" % untracked_list_cap,
         "```",
-        "\n".join(untracked),
+        "\n".join(untracked_display),
+    ]
+    if untracked_list_truncated:
+        body.append("[TRUNCATED — смотри полный список: git ls-files --others --exclude-standard]")
+    body += [
         "```",
     ]
     if skipped_binary:

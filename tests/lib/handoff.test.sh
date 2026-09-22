@@ -266,4 +266,71 @@ echo "$out" | grep -q "check disk space and permissions" || { echo "FAIL: нет
 [ -f .mvp/handoff-014.md ] && { echo "FAIL: частично записанный файл остался на диске" >&2; fail=1; }
 true
 
+# ========== ФИНАЛЬНОЕ РЕВЬЮ ВЕТКИ (находки 1, 3) ==========
+
+# (16) находка 1 (important) — самовключение: .mvp/** (предыдущий указатель
+# ЭТОЙ ЖЕ задачи, бриф, незакоммиченные отчёты) не должен ни встраиваться
+# содержимым, ни попадать в список untracked-путей. Воспроизводим ровно
+# сценарий из находки: сегмент 1 пишет .mvp/handoff-020.md, дерево остаётся
+# грязным (обрыв реальный — файл не коммитится сам по собой), сегмент 2
+# видит СВОЙ ЖЕ предыдущий файл как untracked и не должен инлайнить его.
+new_repo >/dev/null
+mkdir -p src .mvp/briefs
+printf 'line1\nline2\n' > src/a.txt && git add src/a.txt && git commit -qm one
+printf 'line1\nCHANGED\n' > src/a.txt
+printf 'BRIEFSECRETMARKER\n' > .mvp/briefs/task-020-brief.md
+out1="$(bash "$handoff" 020 1 | tail -n 1)"
+assert_eq "seg1 ok" "True" "$(ok_of "$out1")"
+grep -q "segment: 1" .mvp/handoff-020.md || { echo "FAIL: seg1 не записал свой номер сегмента" >&2; fail=1; }
+grep -q "BRIEFSECRETMARKER" .mvp/handoff-020.md && { echo "FAIL: seg1 уже инлайнит .mvp/briefs (второй баг, не тот, что чиним)" >&2; fail=1; }
+# untracked-маркер обычного (не .mvp) файла — регресс-контроль: он обязан
+# продолжать встраиваться как раньше, чинится только .mvp/**.
+printf 'ORDINARYMARKER\n' > src/other.txt
+out2="$(bash "$handoff" 020 2 | tail -n 1)"
+assert_eq "seg2 ok" "True" "$(ok_of "$out2")"
+grep -q "segment: 2" .mvp/handoff-020.md || { echo "FAIL: seg2 не записал свой номер сегмента" >&2; fail=1; }
+grep -q "Handoff pointer — task 020, segment: 1" .mvp/handoff-020.md && { echo "FAIL: seg2 инлайнит СВОЙ ЖЕ предыдущий указатель (self-inclusion)" >&2; fail=1; }
+[ "$(grep -c "НЕ переделывай это заново" .mvp/handoff-020.md)" = "1" ] || { echo "FAIL: seg2 содержит больше одной шапки указателя — старый seg1 инлайнится целиком" >&2; fail=1; }
+grep -q "BRIEFSECRETMARKER" .mvp/handoff-020.md && { echo "FAIL: seg2 инлайнит .mvp/briefs/task-020-brief.md" >&2; fail=1; }
+grep -q "\.mvp/briefs" .mvp/handoff-020.md && { echo "FAIL: путь .mvp/briefs/... виден в списке untracked — .mvp/** обязан быть исключён целиком, не только содержимым" >&2; fail=1; }
+grep -q "ORDINARYMARKER" .mvp/handoff-020.md || { echo "FAIL: обычный (не .mvp) untracked-файл перестал встраиваться — регрессия" >&2; fail=1; }
+
+# (17) находка 3 — потолок секции git status --short: 700 tracked-файлов,
+# все изменены → git status --short даёт 700 строк, STATUS_CAP=500.
+new_repo >/dev/null
+mkdir -p src
+for i in $(seq -w 0 699); do printf 'v0\n' > "src/s$i.txt"; done
+git add src >/dev/null && git commit -qm "700 tracked files"
+for i in $(seq -w 0 699); do printf 'v1\n' > "src/s$i.txt"; done
+out="$(bash "$handoff" 021 1 | tail -n 1)"
+assert_eq "700-file status ok" "True" "$(ok_of "$out")"
+p=".mvp/handoff-021.md"
+grep -q "TRUNCATED — смотри полное состояние: git status --short" "$p" || { echo "FAIL: нет маркера обрезки git status" >&2; fail=1; }
+grep -q "M src/s000.txt" "$p" || { echo "FAIL: первый (по алфавиту) status-путь потерян" >&2; fail=1; }
+grep -q "M src/s699.txt" "$p" && { echo "FAIL: git status --short не обрезан по STATUS_CAP (последний путь всё ещё виден в status-формате)" >&2; fail=1; }
+
+# (18) находка 3 — потолок секции «список untracked-путей»: 520 untracked
+# мелких файлов (заведомо меньше FILE_CAP и суммарно меньше DIFF_CAP/BYTES_CAP,
+# чтобы не зацепить чужой потолок и проверить именно UNTRACKED_LIST_CAP=500
+# изолированно), плюс явная проверка через ОТДЕЛЬНУЮ секцию, не весь файл —
+# капнутое имя всё ещё легитимно встраивается СОДЕРЖИМЫМ (эмбеддинг-цикл не
+# режется этим потолком, режется только отображаемый список путей).
+new_repo >/dev/null
+mkdir -p src
+for i in $(seq -w 0 519); do printf 'x\n' > "src/u$i.txt"; done
+out="$(bash "$handoff" 022 1 | tail -n 1)"
+assert_eq "520-file untracked-list ok" "True" "$(ok_of "$out")"
+p=".mvp/handoff-022.md"
+HO_P="$p" python3 -c '
+import os
+text = open(os.environ["HO_P"], encoding="utf-8").read()
+start = text.index("## Untracked-файлы")
+fence1 = text.index("```", start) + 3
+fence2 = text.index("```", fence1)
+section = text[fence1:fence2]
+assert "src/u000.txt" in section, "src/u000.txt отсутствует в списке untracked-путей"
+assert "src/u519.txt" not in section, "src/u519.txt обязан быть обрезан из списка untracked-путей (UNTRACKED_LIST_CAP)"
+assert "TRUNCATED" in section, "нет маркера обрезки в секции списка untracked-путей"
+' || { echo "FAIL: секция «Untracked-файлы» не обрезана по UNTRACKED_LIST_CAP" >&2; fail=1; }
+
 exit $fail
