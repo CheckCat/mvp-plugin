@@ -19,13 +19,13 @@ ${CLAUDE_PLUGIN_ROOT}/lib/plugin-lock.sh check
 
 `data.lock_broken:true` → [справочник](references/sync-handbook.md) (**Load when:** lock не парсится).
 
-Затем безусловно, при любом исходе check (справочник «Роли механики»): `assemble-agent.sh mvp-reviewer`, `mvp-validator`, `mvp-relay` — скрипт с Шага 3.
+Затем безусловно, при любом исходе check: `assemble-agent.sh mvp-reviewer`, `mvp-validator`, `mvp-relay` — скрипт с Шага 3.
 
-check `ok:true` → скажи «проект соответствует плагину», стоп; роли изменились → сперва фраза HARD-GATE.
+check `ok:true` → роли изменились (`git status`)? → Шаг 6: собранное коммитится, иначе следующий `next` — halt dirty-tree; плюс фраза HARD-GATE. Затем скажи «проект соответствует плагину», стоп.
 
 ## Шаг 2 — нет отметки (`lock_present:false`)
 
-Stop&Ask: роли `.claude/agents/*.md`, стек — `## Stack` (`docs/product/technical-solutions.md`); жди подтверждения.
+Stop&Ask: роли `.claude/agents/*.md`, стек — `## Stack` (`docs/product/technical-solutions.md`).
 
 **Не угадывай:** стек не хранится машинно-читаемо, ошибка даёт не того агента.
 
@@ -43,7 +43,7 @@ ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/assemble-agent.sh <role> [stack]
 
 `stack` — из находки или Шага 2; пустой не передавай, lock обновится сам.
 
-Находка без `stack` — спроси оператора, как на Шаге 2.
+Находка без `stack` — спроси, как на Шаге 2.
 
 У роли есть `<role>-capped.md` → обнови: `assemble-agent.sh --capped <role>` (справочник «Capped-копии»).
 
@@ -80,7 +80,7 @@ ${CLAUDE_PLUGIN_ROOT}/lib/plugin-lock.sh seal
 ${CLAUDE_PLUGIN_ROOT}/lib/finalize.sh sync <msg-file>
 ```
 
-Заводил задачу на Шаге 5 → `... --files .mvp/plan.json` (расширяет пресет).
+Заводил задачу на Шаге 5 → `... --files .mvp/plan.json`.
 
 `<msg-file>` первой строкой: `chore: sync project artifacts with plugin`.
 
