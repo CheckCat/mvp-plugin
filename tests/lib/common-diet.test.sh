@@ -1,33 +1,39 @@
-# Common Agent Principles
+#!/usr/bin/env bash
+# Диета _common.md: прозу режем, контракт — нет (спека §5, task-6-brief).
+#
+# Две проверки:
+#   1. Размер файла целиком <= 8192 байт (бюджет диеты).
+#   2. Контрактный хвост файла — всё от заголовка "## Что ты НЕ делаешь
+#      (общие границы)" до EOF (границы, Готов когда, Stop&Ask,
+#      Defer&Continue, Что не исполнялось, Формат отчёта) — байт-в-байт
+#      равен зафиксированному здесь эталону. Проверка по offset+diff, а не
+#      просто "заголовки на месте": имени заголовка мало, чтобы поймать
+#      правку ВНУТРИ контрактной секции, которая не трогает сам заголовок.
+set -u
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$here/../.." && pwd)"
+fail=0
+f="$repo_root/skills/bootstrap/templates/_common.md"
 
-Общая база ролей `skills/bootstrap/templates/`: `assemble-agent.sh` вставляет файл дословно в роль; `verify-agents-drift.sh` проверяет вхождение. Правь только здесь, не в `.claude/agents/<role>.md` (правка там = drift), и пересобирай.
+if [ ! -f "$f" ]; then
+  echo "FAIL: файл не найден: $f" >&2
+  exit 1
+fi
 
----
+size="$(wc -c <"$f" | tr -d ' ')"
+[ "$size" -le 8192 ] || { echo "FAIL: _common.md = $size байт, диета требует <= 8192" >&2; fail=1; }
 
-## Self-positioning
-
-Опытный разработчик, не «AI-ассистент»; неясно — Stop&Ask, не угадывай.
-
----
-
-## Откуда берётся задача
-
-Бриф `BRIEF_PATH` (`.mvp/briefs/task-<id>.md`): `## Task`, `## Boundary`, `## Interfaces from dependencies`, `## Project invariants`. Иного источника нет.
-
----
-
-## Принципы (применяются в строгом порядке)
-
-1. **Понять раньше, чем писать.** `BRIEF_PATH`, `docs/product/`, `docs/architecture.md`, `.mvp/invariants.md`, похожие файлы — потом код.
-2. **SOLID, KISS, DRY по порядку.** SRP > DRY; KISS > эстетика; DRY — только для логики, не структуры.
-3. **Следуй паттернам.** Похожий модуль/тест есть — повтори структуру и именование.
-4. **Boundary respect.** Граница — `service_path`/`BOUNDARY`, не `files` брифа (подсказка); исключение — `REPORT_PATH`. Выход за неё — провал: без соседей, root-конфига, CI, рефакторинга, фич «на будущее».
-5. **Test what you wrote.** Happy path + error path + edge case внутри границы.
-6. **No silent assumptions.** Неочевидный инвариант — комментарий **why**, не **what**.
-7. **Проверяй exit-код.** `cmd >/dev/null 2>&1` прячет и отказ, и отсутствие инструмента. Не-ASCII/бинарные проверки — через `python3`, не флаги grep.
-
----
-
+heading="## Что ты НЕ делаешь (общие границы)"
+offset="$(grep -boF "$heading" "$f" | head -1 | cut -d: -f1)"
+if [ -z "$offset" ]; then
+  echo "FAIL: контрактная секция исчезла: $heading" >&2
+  fail=1
+else
+  actual_tail="$(mktemp)"
+  expected_tail="$(mktemp)"
+  trap 'rm -f "$actual_tail" "$expected_tail"' EXIT
+  tail -c "+$((offset + 1))" "$f" > "$actual_tail"
+  cat > "$expected_tail" << 'COMMON_TAIL_FIXTURE_EOF'
 ## Что ты НЕ делаешь (общие границы)
 
 - Не пишешь deploy-конфиги, CI, Dockerfile вне ролей devops-engineer
@@ -126,3 +132,18 @@ FILES: <файлы через запятую>
 `FILES:` — только файлы, реально изменённые в рамках текущей задачи (должно
 совпадать с `git status`). Никогда не молчи о `BLOCKED`/`NEEDS_CONTEXT`,
 выдавая частичный результат за `DONE`.
+COMMON_TAIL_FIXTURE_EOF
+
+  if ! diff -u "$expected_tail" "$actual_tail" >/tmp/common-diet-tail.diff 2>&1; then
+    echo "FAIL: контрактный хвост (от \"$heading\" до EOF) отличается от эталона байт-в-байт:" >&2
+    cat /tmp/common-diet-tail.diff >&2
+    fail=1
+  fi
+fi
+
+for heading2 in "## Когда поднимать Stop&Ask" "## Что не исполнялось — обязательная секция отчёта" "## Формат отчёта об окончании (status-contract)"; do
+  grep -qF "$heading2" "$f" || { echo "FAIL: контрактная секция исчезла: $heading2" >&2; fail=1; }
+done
+grep -qF "STATUS:" "$f" || { echo "FAIL: STATUS-контракт исчез" >&2; fail=1; }
+
+exit $fail
