@@ -28,7 +28,7 @@ cat > "$tmpdir/plug/docs/experiments/registry.json" <<'EOF'
 { "version": 1, "max_open": 5, "hypotheses": [
   { "id": "T-pass", "title": "t", "status": "open", "mode_required": "passive",
     "check_script": "scripts/experiments/t-pass.sh",
-    "threshold": "value >= 1", "ttl_runs": 2, "opened": "2026-09-22" },
+    "threshold": "value >= 1", "ttl_runs": 3, "opened": "2026-09-22" },
   { "id": "T-greedy", "title": "t", "status": "needs-optin", "mode_required": "greedy",
     "check_script": "scripts/experiments/t-greedy.sh",
     "threshold": "value >= 1", "ttl_runs": 9, "opened": "2026-09-22" },
@@ -76,13 +76,16 @@ echo '{"phase":"done"}' > .mvp/state.json
 out="$(bash "$tmpdir/plug/lib/experiments.sh" check run-3 | last_line)"
 assert_eq "дефолт greedy" "2" "$(grep -c '"T-greedy"' .mvp/experiments/results.jsonl)"
 
-# (5) list: runs_seen из results (T-pass видел run-1,2,3), ttl_runs=2 → expired-candidate
+# (5) list: T-pass прогоняется на run-1/run-2/run-3 — перед каждым прогоном
+# runs_seen (0, затем 1, затем 2) ещё < ttl_runs=3, гипотеза не expired.
+# После третьего прогона runs_seen=3, и 3 >= ttl_runs=3 → expired_candidate.
 out="$(bash "$tmpdir/plug/lib/experiments.sh" list | last_line)"
 assert_eq "list ok" "True" "$(jget "$out" 'd["ok"]')"
 assert_eq "runs_seen из results" "3" "$(jget "$out" '[h for h in d["data"]["hypotheses"] if h["id"]=="T-pass"][0]["runs_seen"]')"
 assert_eq "ttl исчерпан → expired-candidate" "True" "$(jget "$out" '[h for h in d["data"]["hypotheses"] if h["id"]=="T-pass"][0]["expired_candidate"]')"
 
-# (6) expired-candidate больше не прогоняется
+# (6) на run-4 T-pass уже expired_candidate (см. (5)) — check её пропускает,
+# число записей T-pass в results.jsonl не растёт.
 n_before="$(grep -c '"T-pass"' .mvp/experiments/results.jsonl)"
 bash "$tmpdir/plug/lib/experiments.sh" check run-4 >/dev/null
 assert_eq "expired не прогоняется" "$n_before" "$(grep -c '"T-pass"' .mvp/experiments/results.jsonl)"

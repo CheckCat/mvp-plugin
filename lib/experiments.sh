@@ -53,7 +53,7 @@ out = []
 for h in reg.get("hypotheses", []):
     n = len(seen.get(h["id"], set()))
     out.append({**h, "runs_seen": n,
-                "expired_candidate": h.get("status") in ("open", "needs-optin") and n > h.get("ttl_runs", 10)})
+                "expired_candidate": h.get("status") in ("open", "needs-optin") and n >= h.get("ttl_runs", 10)})
 print(json.dumps({"ok": True, "reason": None, "hint": None,
                   "data": {"max_open": reg.get("max_open", 5), "hypotheses": out}}))
 PY
