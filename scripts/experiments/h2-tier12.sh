@@ -18,43 +18,16 @@ if [ -z "${JOURNALS_DIR:-}" ] || [ ! -d "${JOURNALS_DIR:-}" ]; then
 fi
 
 python3 <<'PY'
-import glob, json, os, statistics
+import glob, json, os, statistics, sys
 
 journals_dir = os.environ["JOURNALS_DIR"]
 
-
-def first_prefix(path):
-    """Первый usage-объект файла: input + cache_creation(total) + cache_read.
-
-    Та же экстракция cache_creation, что и в tokcost.scan (ephemeral-поля
-    приоритетны, плоское cache_creation_input_tokens — fallback), но без
-    дедупа по requestId: нужен именно ПЕРВЫЙ запрос файла, не сумма.
-    """
-    with open(path, errors="replace") as fh:
-        for line in fh:
-            if '"usage"' not in line:
-                continue
-            try:
-                d = json.loads(line)
-            except ValueError:
-                continue
-            m = d.get("message") or {}
-            u = m.get("usage")
-            if not isinstance(u, dict):
-                continue
-            cc = u.get("cache_creation") or {}
-            cw5 = cc.get("ephemeral_5m_input_tokens")
-            cw1 = cc.get("ephemeral_1h_input_tokens")
-            if cw5 is None and cw1 is None:
-                cw5, cw1 = u.get("cache_creation_input_tokens", 0) or 0, 0
-            return (
-                (u.get("input_tokens", 0) or 0)
-                + (cw5 or 0)
-                + (cw1 or 0)
-                + (u.get("cache_read_input_tokens", 0) or 0)
-            )
-    return None
-
+# first_prefix — общая реализация с h3-prefix-gap.sh, вынесена в tokcost.py
+# (финальное ревью, отложенная находка: две дословные копии уже разошлись
+# докстрингами). Импорт через sys.path — тот же приём, что и в
+# tests/lib/tokcost.test.sh для scan/merge.
+sys.path.insert(0, os.path.join(os.environ["PLUGIN_ROOT"], "scripts", "experiments"))
+from tokcost import first_prefix
 
 reviewer_prefixes = []
 generic_count = 0

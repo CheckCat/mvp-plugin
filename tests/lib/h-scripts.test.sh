@@ -23,6 +23,19 @@ for i in 1 2 3; do echo "{\"event\":\"task_complete\",\"task\":\"00$i\",\"delta_
 out="$(run_h h1-cap.sh)"
 assert_eq "h1 мало данных: ok" "True" "$(jd "$out" 'd["ok"]')"
 assert_eq "h1 мало данных: verdict null" "None" "$(jd "$out" 'd["data"]["verdict"]')"
+
+# --- H1 (отложенная находка финального ревью): контрольной группы нет
+# вовсе (n_control=0, ни одного события arm=control в файле) — не путать
+# с «мало контроля» (n_control=3 ниже): здесь дошедших до control-плеча
+# задач не было ни одной. ok:true, verdict:null, без деления на n_control=0.
+: > .mvp/telemetry/events.jsonl
+for i in 1 2 3 4 5 6 7 8; do echo "{\"event\":\"task_complete\",\"task\":\"z$i\",\"delta_tokens\":10,\"dispatches\":8,\"arm\":\"cap30\",\"segments\":1,\"ts\":\"t\"}" >> .mvp/telemetry/events.jsonl; done
+out="$(run_h h1-cap.sh)"
+assert_eq "h1 n_control=0 (контрольной группы нет): ok" "True" "$(jd "$out" 'd["ok"]')"
+assert_eq "h1 n_control=0: verdict null" "None" "$(jd "$out" 'd["data"]["verdict"]')"
+assert_eq "h1 n_control=0: value.n_control" "0" "$(jd "$out" 'd["data"]["value"]["n_control"]')"
+assert_eq "h1 n_control=0: reason называет недостаточность" "True" "$(jd "$out" '"недостаточно контрольных" in d["reason"]')"
+
 : > .mvp/telemetry/events.jsonl
 for i in 1 2 3 4 5 6 7 8; do echo "{\"event\":\"task_complete\",\"task\":\"a$i\",\"delta_tokens\":10,\"dispatches\":8,\"arm\":\"cap30\",\"segments\":1,\"ts\":\"t\"}" >> .mvp/telemetry/events.jsonl; done
 for i in 1 2 3 4 5 6 7 8; do echo "{\"event\":\"task_complete\",\"task\":\"c$i\",\"delta_tokens\":10,\"dispatches\":9,\"arm\":\"control\",\"ts\":\"t\"}" >> .mvp/telemetry/events.jsonl; done
@@ -193,6 +206,34 @@ out="$(JOURNALS_DIR="$(pwd)/j5" HYP_ID=t RUN_LABEL=r RESULTS_PATH=.mvp/experimen
 assert_eq "h2 refuted (медиана 30000 > 24000)" "refuted" "$(jd "$out" 'd["data"]["verdict"]')"
 assert_eq "h2 refuted: reason содержит числа" "True" "$(jd "$out" '"median_reviewer_prefix" in d["reason"]')"
 
+# --- H2 (отложенная находка финального ревью): промежуточный диапазон
+# медианы между порогом confirmed (16000) и порогом refuted (24000),
+# n=3=MIN_OBS, generic_ladder_agents=0 — ни одно решающее условие не
+# выполнено, вердикта быть не должно.
+mkdir -p j8
+cat > j8/agent-r1.meta.json <<'EOF'
+{"agentType":"mvp-reviewer"}
+EOF
+cat > j8/agent-r1.jsonl <<'EOF'
+{"type":"assistant","requestId":"r1","message":{"model":"m","usage":{"input_tokens":0,"cache_creation_input_tokens":18000,"cache_read_input_tokens":0,"output_tokens":1}}}
+EOF
+cat > j8/agent-r2.meta.json <<'EOF'
+{"agentType":"mvp-reviewer"}
+EOF
+cat > j8/agent-r2.jsonl <<'EOF'
+{"type":"assistant","requestId":"r2","message":{"model":"m","usage":{"input_tokens":0,"cache_creation_input_tokens":20000,"cache_read_input_tokens":0,"output_tokens":1}}}
+EOF
+cat > j8/agent-r3.meta.json <<'EOF'
+{"agentType":"mvp-reviewer"}
+EOF
+cat > j8/agent-r3.jsonl <<'EOF'
+{"type":"assistant","requestId":"r3","message":{"model":"m","usage":{"input_tokens":0,"cache_creation_input_tokens":22000,"cache_read_input_tokens":0,"output_tokens":1}}}
+EOF
+out="$(JOURNALS_DIR="$(pwd)/j8" HYP_ID=t RUN_LABEL=r RESULTS_PATH=.mvp/experiments/results.jsonl PLUGIN_ROOT="$repo_root" PROJECT_ROOT="$(pwd)" bash "$repo_root/scripts/experiments/h2-tier12.sh" | tail -n 1)"
+assert_eq "h2 промежуточная медиана: значение" "20000" "$(jd "$out" 'd["data"]["value"]["median_reviewer_prefix"]')"
+assert_eq "h2 промежуточная медиана (16000 < 20000 <= 24000): нет вердикта" "None" "$(jd "$out" 'd["data"]["verdict"]')"
+assert_eq "h2 промежуточная медиана: reason не укладывается ни в одно правило" "True" "$(jd "$out" '"не укладываются" in d["reason"]')"
+
 # --- H1 mean_segments считается по рукаву (8 событий segments:1 из confirmed-кейса выше остались в events.jsonl)
 out="$(run_h h1-cap.sh)"
 assert_eq "h1 мало данных: mean_segments из последнего прогона (segments=3 x8)" "3.0" "$(jd "$out" 'd["data"]["value"]["mean_segments"]')"
@@ -207,9 +248,27 @@ out="$(run_h h1-cap.sh)"
 assert_eq "h1 mean_segments игнорирует событие без поля segments" "2.0" "$(jd "$out" 'd["data"]["value"]["mean_segments"]')"
 assert_eq "h1 n_arm считает и событие без segments" "8" "$(jd "$out" 'd["data"]["value"]["n_arm"]')"
 
+# --- H1 (отложенная находка финального ревью): эпоха рукава. events.jsonl
+# копится по ВСЕМ прогонам проекта — фикстура мешает старые события ДО
+# появления поля arm (Task 9, dispatches=999 — заведомо ломает среднее,
+# если бы попали в выборку) с новыми cap30/control-событиями. Естественный
+# признак эпохи — само присутствие поля arm; старые события его не несут.
+: > .mvp/telemetry/events.jsonl
+for i in 1 2 3 4 5 6 7 8; do echo "{\"event\":\"task_complete\",\"task\":\"old$i\",\"delta_tokens\":10,\"dispatches\":999,\"ts\":\"t\"}" >> .mvp/telemetry/events.jsonl; done
+for i in 1 2 3 4 5 6 7 8; do echo "{\"event\":\"task_complete\",\"task\":\"e$i\",\"delta_tokens\":10,\"dispatches\":8,\"arm\":\"cap30\",\"segments\":1,\"ts\":\"t\"}" >> .mvp/telemetry/events.jsonl; done
+for i in 1 2 3 4 5 6 7 8; do echo "{\"event\":\"task_complete\",\"task\":\"f$i\",\"delta_tokens\":10,\"dispatches\":9,\"arm\":\"control\",\"ts\":\"t\"}" >> .mvp/telemetry/events.jsonl; done
+out="$(run_h h1-cap.sh)"
+assert_eq "h1 эпоха рукава: дорукавные события не входят в n_arm" "8" "$(jd "$out" 'd["data"]["value"]["n_arm"]')"
+assert_eq "h1 эпоха рукава: дорукавные события не входят в n_control" "8" "$(jd "$out" 'd["data"]["value"]["n_control"]')"
+assert_eq "h1 эпоха рукава: mean_disp_control не смещено (999 исключён)" "9.0" "$(jd "$out" 'd["data"]["value"]["mean_disp_control"]')"
+assert_eq "h1 эпоха рукава: вердикт по чистой выборке — confirmed" "confirmed" "$(jd "$out" 'd["data"]["verdict"]')"
+
 # results.jsonl получает «предыдущий прогон» этой гипотезы с gap<2000 —
 # нужен ниже и для граничного (недостаточно), и для достаточного кейса.
-echo '{"hypothesis":"t","run_label":"r0","value":{"gap":500},"verdict":null,"ts":"t"}' >> .mvp/experiments/results.jsonl
+# n_generic/n_role >= MIN_OBS помечают эту запись СОСТОЯТЕЛЬНОЙ (находка
+# I4) — без них она не смогла бы стать первым из «двух прогонов подряд»
+# для refuted ниже (см. отдельный тест «ненадёжный предыдущий прогон»).
+echo '{"hypothesis":"t","run_label":"r0","value":{"gap":500,"n_generic":3,"n_role":3},"verdict":null,"ts":"t"}' >> .mvp/experiments/results.jsonl
 
 # --- H3 Finding 3, граница снизу: 2 generic + 2 mvp- (MIN_OBS-1 по каждой
 # группе) — gap<2000 и подходящий предыдущий прогон есть, но данных мало →
@@ -263,10 +322,23 @@ EOF
 # generic median(5000,5000,5000)=5000; role median(4500,4500,4500)=4500; gap=500<2000
 out="$(JOURNALS_DIR="$(pwd)/j6" HYP_ID=t RUN_LABEL=r RESULTS_PATH=.mvp/experiments/results.jsonl PLUGIN_ROOT="$repo_root" PROJECT_ROOT="$(pwd)" bash "$repo_root/scripts/experiments/h3-prefix-gap.sh" | tail -n 1)"
 assert_eq "h3 refuted: gap" "500" "$(jd "$out" 'd["data"]["value"]["gap"]')"
-assert_eq "h3 refuted: 3+3 наблюдений, предыдущий прогон тоже <2000 → refuted" "refuted" "$(jd "$out" 'd["data"]["verdict"]')"
+assert_eq "h3 refuted: 3+3 наблюдений, предыдущий СОСТОЯТЕЛЬНЫЙ прогон тоже <2000 → refuted" "refuted" "$(jd "$out" 'd["data"]["verdict"]')"
 assert_eq "h3 refuted: reason содержит числа" "True" "$(jd "$out" '"gap=" in d["reason"]')"
+assert_eq "h3 refuted: value несёт n_generic состоятельного замера" "3" "$(jd "$out" 'd["data"]["value"]["n_generic"]')"
+assert_eq "h3 refuted: value несёт n_role состоятельного замера" "3" "$(jd "$out" 'd["data"]["value"]["n_role"]')"
 # без предыдущей записи (чужой HYP_ID) — тот же текущий gap<2000, наблюдений хватает, но одного прогона мало
 out="$(JOURNALS_DIR="$(pwd)/j6" HYP_ID=other RUN_LABEL=r RESULTS_PATH=.mvp/experiments/results.jsonl PLUGIN_ROOT="$repo_root" PROJECT_ROOT="$(pwd)" bash "$repo_root/scripts/experiments/h3-prefix-gap.sh" | tail -n 1)"
 assert_eq "h3 один прогон с малым gap, нет своей предыдущей записи → null" "None" "$(jd "$out" 'd["data"]["verdict"]')"
+
+# --- H3 находка I4: предыдущая запись есть и её gap<2000, но она СТАРОГО
+# формата — без n_generic/n_role (как писал check-скрипт до этого фикса,
+# или как результат ручной правки журнала). Ложный вердикт хуже отсутствия
+# вердикта: такая запись не может быть первым из «двух прогонов подряд»,
+# потому что её состоятельность неизвестна — «два прогона подряд»
+# не должно вырождаться в «один настоящий плюс один шумовой».
+echo '{"hypothesis":"unreliable-prev","run_label":"r0","value":{"gap":500},"verdict":null,"ts":"t"}' >> .mvp/experiments/results.jsonl
+out="$(JOURNALS_DIR="$(pwd)/j6" HYP_ID=unreliable-prev RUN_LABEL=r RESULTS_PATH=.mvp/experiments/results.jsonl PLUGIN_ROOT="$repo_root" PROJECT_ROOT="$(pwd)" bash "$repo_root/scripts/experiments/h3-prefix-gap.sh" | tail -n 1)"
+assert_eq "h3 I4: gap<2000 текущий, но prev без n_generic/n_role → НЕ refuted" "None" "$(jd "$out" 'd["data"]["verdict"]')"
+assert_eq "h3 I4: reason называет неизвестную состоятельность prev" "True" "$(jd "$out" '"состоятельность" in d["reason"]')"
 
 exit $fail

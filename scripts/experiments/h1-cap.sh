@@ -46,6 +46,20 @@ try:
             if ev.get("event") != "task_complete":
                 continue
             arm = ev.get("arm")
+            # Эпоха рукава (минорная находка финального ревью): events.jsonl
+            # копится по ВСЕМ прогонам проекта за всё время, включая те, что
+            # были до появления поля arm (Task 9). RUN_LABEL этого прогона
+            # тут не спасает — он метит ТЕКУЩИЙ прогон, а H1 нарочно копит
+            # выборку через много прогонов подряд (порог n_arm>=8 иначе не
+            # набрать). Естественная граница эпохи — сам факт присутствия
+            # arm: plan-io.mjs complete пишет его ТОЛЬКО когда задача реально
+            # прошла через экспериментальную развилку (armEligible в
+            # workflow.mjs) — то есть только начиная с эпохи, когда рукав
+            # вообще существовал. Условие явное (а не побочный эффект двух
+            # elif), чтобы будущая правка вроде «нет arm -> считать control»
+            # не расширила выборку молча на дорукавные прогоны.
+            if arm not in ("cap30", "control"):
+                continue
             disp = ev.get("dispatches")
             if not isinstance(disp, (int, float)):
                 continue
@@ -54,7 +68,7 @@ try:
                 seg = ev.get("segments")
                 if isinstance(seg, (int, float)):
                     arm_seg.append(seg)
-            elif arm == "control":
+            else:
                 control_disp.append(disp)
 except FileNotFoundError:
     pass
