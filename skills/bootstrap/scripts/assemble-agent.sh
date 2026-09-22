@@ -104,7 +104,11 @@ if [ "${1:-}" = "--capped" ]; then
     fail "no assembled agent for role=$CAP_ROLE: $CAP_SRC" \
       "run assemble-agent.sh $CAP_ROLE [stack] first — --capped copies an already-assembled file, it does not assemble from a template"
   fi
-  CA_SRC="$CAP_SRC" CA_DST="$CAP_DST" CA_ROLE="$CAP_ROLE" python3 -c '
+  # Python-ошибка (raise SystemExit("...")) обязана доехать до hint'а по имени
+  # причины, как и остальные отказы в этом файле (ниже: LOCK_OUT, "no template
+  # for role"), а не общей «смотри вывод python выше». Ловим stdout+stderr:
+  # на успехе скрипт ничего не печатает, на отказе — ровно текст SystemExit.
+  CAP_ERR="$(CA_SRC="$CAP_SRC" CA_DST="$CAP_DST" CA_ROLE="$CAP_ROLE" python3 -c '
 import os, tempfile
 
 src, dst, role = os.environ["CA_SRC"], os.environ["CA_DST"], os.environ["CA_ROLE"]
@@ -133,9 +137,9 @@ with tempfile.NamedTemporaryFile("w", dir=out_dir, delete=False, encoding="utf-8
     tmp.write("\n".join(lines))
     tmp_path = tmp.name
 os.replace(tmp_path, dst)
-'
+' 2>&1)"
   if [ $? -ne 0 ]; then
-    fail "--capped: failed to build capped copy for role=$CAP_ROLE" "see python error above"
+    fail "--capped: failed to build capped copy for role=$CAP_ROLE" "${CAP_ERR:-python3 exited non-zero with no message — check disk space/permissions for $CAP_DST}"
   fi
   CAP_DATA="$(python3 -c 'import json,sys; print(json.dumps({"out": sys.argv[1], "role": sys.argv[2]}))' "$CAP_DST" "$CAP_ROLE-capped")"
   emit_result true "" "" "$CAP_DATA"

@@ -58,6 +58,29 @@ assert_eq "--capped освежает копию" "True" "$(jok "$out")"
 out="$(bash "$repo_root/skills/bootstrap/scripts/verify-agents-drift.sh" 2>/dev/null | tail -n 1)"
 assert_eq "после пересборки копии дрейф-чек снова зелёный" "True" "$(jok "$out")"
 
+# Отложенная находка (ре-ревью): hint отказа --capped обязан называть
+# КОНКРЕТНУЮ причину (текст SystemExit из python-блока), а не общую фразу
+# «see python error above» — портим уже собранный источник (снимаем первую
+# строку "---", фронтматтера не остаётся) и проверяем, что hint дословно
+# несёт python-сообщение о причине, а не заглушку.
+python3 - <<'PY'
+p = '.claude/agents/integration-specialist.md'
+s = open(p, encoding='utf-8').read()
+s = s.split('\n', 1)[1]  # срезаем первую строку "---" — фронтматтера больше нет
+open(p, 'w', encoding='utf-8').write(s)
+PY
+out="$(bash "$repo_root/skills/bootstrap/scripts/assemble-agent.sh" --capped integration-specialist | tail -n 1)"
+assert_eq "--capped на источнике без фронтматтера отказывает" "False" "$(jok "$out")"
+hint="$(O="$out" python3 -c 'import json,os; print(json.loads(os.environ["O"])["hint"])')"
+case "$hint" in
+  *"no frontmatter"*) : ;;
+  *) echo "FAIL: hint не называет конкретную причину отказа (нет фронтматтера), получено: [$hint]" >&2; fail=1 ;;
+esac
+case "$hint" in
+  *"see python error above"*) echo "FAIL: hint всё ещё общая фраза «see python error above»" >&2; fail=1 ;;
+  *) : ;;
+esac
+
 # --- проводка ----------------------------------------------------------------
 sync_skill="$repo_root/skills/sync/SKILL.md"
 sync_hb="$repo_root/skills/sync/references/sync-handbook.md"

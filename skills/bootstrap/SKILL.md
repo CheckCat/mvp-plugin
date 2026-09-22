@@ -105,7 +105,7 @@ if [ -d services/frontend ]; then npm --prefix services/frontend run test -- --r
 ```
 ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/assemble-agent.sh <role> [stack]
 ```
-Только роли из enum `role` в `skills/plan/references/plan-schema.json` — по ним `mvp:build` диспатчит агентов (`agentType`). Всегда: `backend-implementer <backend>`, `devops-engineer <deploy>.<backend>` (`<deploy>` из Stack), `test-writer <backend>`. Плюс `frontend-implementer <frontend>` при `frontend != none` и `integration-specialist`, если brief называет integration-сервисы. Ролей `validator`/`code-reviewer` нет — их гоняют инлайн-шаблоны `skills/build/agents/*.md`. `TEMPLATES_DIR`/`OUT_DIR` не трогай. Затем собери безусловные роли механики: `assemble-agent.sh mvp-reviewer`, `mvp-validator`, `mvp-relay` (без стека).
+Только роли из enum `role` в `skills/plan/references/plan-schema.json` — по ним `mvp:build` диспатчит агентов (`agentType`). Всегда: `backend-implementer <backend>`, `devops-engineer <deploy>.<backend>` (`<deploy>` из Stack), `test-writer <backend>`. Плюс `frontend-implementer <frontend>` при `frontend != none` и `integration-specialist`, если brief называет `integration-*`-сервисы. Ролей `validator`/`code-reviewer` нет — их гоняют инлайн-шаблоны `skills/build/agents/*.md`. `TEMPLATES_DIR`/`OUT_DIR` не трогай. Затем собери безусловные роли механики: `assemble-agent.sh mvp-reviewer`, `mvp-validator`, `mvp-relay` (без стека).
 
 В режиме experiments=greedy (дефолт при отсутствии ключа) после сборки ролей плана сделай capped-копии имплементерских ролей: `assemble-agent.sh --capped <role>`.
 
@@ -113,7 +113,7 @@ ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/assemble-agent.sh <role> [stack]
 ```
 ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/verify-agents-drift.sh
 ```
-`ok:false` — НЕ правь `.claude/agents/*.md` руками, перезапусти `assemble-agent.sh` для роли из `data.violations`. Byte-substring-инвариант не ослабляется никогда — мешает, значит сломан `assemble-agent.sh`, чини его, не проверку.
+`ok:false` — НЕ правь `.claude/agents/*.md` руками, перезапусти `assemble-agent.sh` для роли из `data.violations`. Byte-substring-инвариант не ослабляется никогда — если мешает, значит сломан `assemble-agent.sh`, чини его, не проверку.
 
 ## Шаг 5 — CLAUDE.md + docs/architecture.md (творческая часть)
 
