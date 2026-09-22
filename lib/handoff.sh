@@ -7,111 +7,295 @@
 # без него продолжение перепроходит разведку (E≈11.5).
 # Чистое дерево — это НЕ обрыв по потолку (обрыв всегда оставляет правки):
 # ok:false, диспетчер паркует задачу обычным путём.
+#
+# Single-line JSON contract on every exit path (см. lib/gate.sh):
+#   {"ok":bool,"reason":str|null,"hint":str|null,"data":object|null}
+# ok:false всегда exit 1. Скрипт никогда не меняет состояние репозитория:
+# только читает git, пишет ровно один файл под .mvp/.
+#
+# Round 2 fix log (ре-ревью раунда 1 нашло дыры в этих же местах):
+#   A (critical) — ветка «segment не число» строила JSON вручную через
+#     printf с конкатенацией необработанного аргумента прямо в JSON-текст:
+#     `'"$SEG"'`. Аргумент с кавычкой ломал JSON, аргумент с переводом
+#     строки размножал строки stdout — оба прямое нарушение центрального
+#     инварианта. Исправлено радикально: единственная точка вывода —
+#     emit_result, значения идут в python ТОЛЬКО через env, program-текст
+#     статичен. Стиль — skills/bootstrap/scripts/verify-agents-drift.sh
+#     (её emit_result) / lib/gate.sh.
+#   B (important) — untracked-файлы, похожие на бинарные, раньше либо
+#     встраивались как есть, либо отсекались произвольным байтовым
+#     порогом (не то же самое, что определение бинарности). Теперь перед
+#     встраиванием каждый untracked-файл сканируется на NUL-байт в первых
+#     8000 байтах — та же эвристика, что использует сам git (см. коммент в
+#     lib/review-package.sh: "git calls a file binary when it finds a NUL
+#     byte in the first 8000" — уже прецедент в этом репозитории). Бинарные
+#     файлы получают видимую пометку вместо содержимого, самим содержимым
+#     скрипт больше не рискует.
+#   D — ветки «mkdir .mvp не удался» / «запись не удалась» покрыты тестами.
+#     Проверка непустоты итогового файла оставлена как defense-in-depth
+#     поверх атомарной записи — см. отчёт задачи, почему её нельзя честно
+#     дискриминирующе протестировать чёрным ящиком (контент всегда
+#     непустой по построению — заголовок пишется безусловно).
+#   E (minor) — усечение диффа теперь текстовое (python str), а не
+#     байтовое: границы режутся по символам, а незавершённый хвост UTF-8
+#     после байтового потолка отбрасывается, не превращаясь в мусор
+#     посреди кириллицы (в этом репозитории комментарии и markdown — на
+#     русском).
 set -u
+
+# emit_result <ok:true|false> <reason> <hint> <data-json-or-empty>
+#   Единственная точка вывода итогового JSON — используется ВСЕМИ ветками,
+#   отказными и успешной. reason/hint: пустая строка -> null. data: пустая
+#   строка -> null, иначе обязана быть валидным JSON-текстом. Значения
+#   попадают в python только через env (HO_*), как аргументы bash-функции
+#   ($1..$4), а не как подстрока внутри текста python-программы, так что
+#   кавычка/перевод строки/что угодно в значении не может сломать вывод.
+emit_result() {
+  HO_OK="$1" HO_REASON="$2" HO_HINT="$3" HO_DATA="$4" python3 -c '
+import json, os
+ok = os.environ["HO_OK"] == "true"
+reason = os.environ.get("HO_REASON") or None
+hint = os.environ.get("HO_HINT") or None
+data_raw = os.environ.get("HO_DATA") or ""
+data = json.loads(data_raw) if data_raw else None
+print(json.dumps({"ok": ok, "reason": reason, "hint": hint, "data": data}))
+'
+}
+
 TASK="${1:-}"; SEG="${2:-}"
 
-# Валидируем аргументы ПЕРЕД любым выводом JSON
-[ -n "$TASK" ] && [ -n "$SEG" ] || { printf '%s\n' '{"ok":false,"reason":"usage: handoff.sh <task_id> <segment>","hint":null,"data":null}'; exit 1; }
+[ -n "$TASK" ] && [ -n "$SEG" ] || {
+  emit_result false "usage: handoff.sh <task_id> <segment>" "" ""
+  exit 1
+}
 
-# Валидируем segment: должно быть число
 if ! [[ "$SEG" =~ ^[0-9]+$ ]]; then
-  printf '%s\n' '{"ok":false,"reason":"segment must be an integer","hint":"got: '"$SEG"'","data":null}'
+  emit_result false "segment must be an integer" "got: $SEG" ""
   exit 1
 fi
 
-# Валидируем task_id: безопасные символы (недопустимы .. и /)
 if ! [[ "$TASK" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-  printf '%s\n' '{"ok":false,"reason":"task_id contains invalid characters","hint":"allowed: [a-zA-Z0-9_-]","data":null}'
+  emit_result false "task_id contains invalid characters" "allowed: [a-zA-Z0-9_-], got: $TASK" ""
   exit 1
 fi
 
-DIFF_CAP=4000
-BYTES_CAP=102400  # 100KB — потолок по размеру встраивания untracked файлов
+DIFF_CAP=4000       # строк
+BYTES_CAP=102400    # 100KB
 
-# Проверяем что это git репозиторий
-status="$(git status --porcelain 2>/dev/null)" || { printf '%s\n' '{"ok":false,"reason":"not a git repo","hint":null,"data":null}'; exit 1; }
+status="$(git status --porcelain 2>/dev/null)" || {
+  emit_result false "not a git repo" "" ""
+  exit 1
+}
 
-# Чистое дерево — не обрыв по потолку
 if [ -z "$status" ]; then
-  printf '%s\n' '{"ok":false,"reason":"clean tree — not a cap break","hint":"a turn-capped implementer always leaves edits; treat this as an ordinary failure and park","data":{"task":"'"$TASK"'"}}'
+  DATA="$(HO_TASK="$TASK" python3 -c 'import json,os; print(json.dumps({"task": os.environ["HO_TASK"]}))')"
+  emit_result false "clean tree — not a cap break" \
+    "a turn-capped implementer always leaves edits; treat this as an ordinary failure and park" "$DATA"
   exit 1
 fi
 
-# Вычисляем дифф один раз (git diff HEAD захватит staged и unstaged изменения)
-# Также встраиваем untracked файлы, которые меньше порога по размеру
-diff_output="$(
-  git diff HEAD
-  git ls-files --others --exclude-standard | while read -r f; do
-    if [ -f "$f" ]; then
-      fsize="$(wc -c < "$f" 2>/dev/null || echo "$((BYTES_CAP + 1))")"
-      # Встраиваем только если файл меньше 50KB (половина потолка, для оставления места на форматирование)
-      if [ "$fsize" -lt 51200 ]; then
-        echo "diff --git a/$f b/$f"
-        echo "new file"
-        echo "--- /dev/null"
-        echo "+++ b/$f"
-        cat "$f"
-        echo
-      fi
-    fi
-  done
-)"
-
-# Обрезаем по числу строк для вывода
-diff_for_output="$(echo "$diff_output" | head -n "$DIFF_CAP")"
-diff_output_lines="$(echo "$diff_output" | wc -l)"
-truncated=0
-
-# Проверяем оба потолка: по строкам и по байтам
-if [ "$diff_output_lines" -gt "$DIFF_CAP" ]; then
-  truncated=1
-fi
-
-diff_bytes="$(echo "$diff_for_output" | wc -c)"
-if [ "$diff_bytes" -gt "$BYTES_CAP" ]; then
-  truncated=1
-  # Обрезаем еще сильнее по байтам
-  diff_for_output="$(echo "$diff_output" | head -c "$BYTES_CAP")"
-fi
-
-# Создаём директорию .mvp
-mkdir -p .mvp || { printf '%s\n' '{"ok":false,"reason":"failed to create .mvp directory","hint":"check permissions and disk space","data":null}'; exit 1; }
+mkdir -p .mvp || {
+  emit_result false "failed to create .mvp directory" "check permissions and disk space" ""
+  exit 1
+}
 
 out=".mvp/handoff-$TASK.md"
 
-# Пишем файл-указатель
-{
-  echo "# Handoff pointer — task $TASK, segment: $SEG"
-  echo
-  echo "Предыдущий агент этой задачи оборван потолком ходов. Ниже — что уже"
-  echo "сделано в рабочем дереве (НЕ переделывай это заново):"
-  echo
-  echo '## git status --short'
-  echo '```'
-  git status --short
-  echo '```'
-  echo
-  echo "## git diff HEAD (первые $DIFF_CAP строк / $BYTES_CAP bytes)"
-  echo '```diff'
-  echo "$diff_for_output"
-  if [ "$truncated" -eq 1 ]; then
-    echo "[TRUNCATED — смотри полный diff: git diff HEAD]"
-  fi
-  echo '```'
-  echo
-  echo '## Untracked-файлы (созданы предыдущим сегментом, содержимое смотри сам)'
-  echo '```'
-  git ls-files --others --exclude-standard
-  echo '```'
-  echo
-  echo "Отчёт предыдущего сегмента, если он успел его писать: .mvp/reports/task-$TASK.md"
-} > "$out" || { printf '%s\n' '{"ok":false,"reason":"failed to write handoff file","hint":"check disk space and permissions for .mvp/","data":null}'; exit 1; }
+# Сырые куски git-состояния уходят во временные файлы, а не в env: у env
+# есть предел размера (ARG_MAX), а грязное дерево может дать дифф на
+# десятки тысяч строк ещё до всякого усечения. python читает файлы.
+work="$(mktemp -d)" || {
+  emit_result false "failed to create temp workspace" "" ""
+  exit 1
+}
+trap 'rm -rf "$work"' EXIT
 
-# Проверяем что файл успешно создан и не пустой
-if [ ! -s "$out" ]; then
-  printf '%s\n' '{"ok":false,"reason":"handoff file is empty or was not written","hint":"check write permissions for '"$out"'","data":null}'
+git status --short > "$work/status.txt" 2>/dev/null
+# git diff HEAD, а не просто git diff: захватывает и staged, и unstaged
+# изменения tracked-файлов одной командой (round 1 fix — сохраняем).
+git diff HEAD > "$work/diff.txt" 2>/dev/null
+git ls-files --others --exclude-standard -z > "$work/untracked.nul" 2>/dev/null
+
+# Основная сборка + атомарная запись — одним python-процессом. На успехе
+# печатает {"ok":true,...}; на любой ошибке (включая падение записи) ловит
+# исключение и печатает {"ok":false,"error":...} сама, ничего не теряя
+# молча. Итоговый CLI-ответ всё равно строит только emit_result — этот
+# вывод бэш разбирает и передаёт в emit_result дальше.
+BUILD_JSON="$(
+  HO_TASK="$TASK" HO_SEG="$SEG" HO_OUT_DIR=".mvp" HO_OUT_NAME="handoff-$TASK.md" \
+  HO_STATUS_FILE="$work/status.txt" HO_DIFF_FILE="$work/diff.txt" \
+  HO_UNTRACKED_FILE="$work/untracked.nul" \
+  HO_DIFF_CAP="$DIFF_CAP" HO_BYTES_CAP="$BYTES_CAP" \
+  python3 - <<'PY'
+import json, os, sys, tempfile
+
+
+def looks_binary(path, sniff=8000):
+    # Та же эвристика, что git: NUL-байт в первых 8000 байтах файла — см.
+    # заголовочный коммент lib/review-package.sh. Нечитаемый файл тоже
+    # трактуем как "нельзя встраивать" (fail closed, не молча пропустить).
+    try:
+        with open(path, "rb") as fh:
+            chunk = fh.read(sniff)
+    except OSError:
+        return True
+    return b"\x00" in chunk
+
+
+def truncate_text_safely(text, cap_bytes):
+    # Round 2 fix E: режем по UTF-8 БАЙТОВОМУ потолку, но не байтовым
+    # срезом str-объекта — кодируем, режем bytes, декодируем обратно с
+    # errors="ignore", так что незавершённая хвостовая последовательность
+    # отбрасывается, а не превращается в мусор посреди русского текста.
+    data = text.encode("utf-8")
+    if len(data) <= cap_bytes:
+        return text, False
+    return data[:cap_bytes].decode("utf-8", errors="ignore"), True
+
+
+try:
+    task = os.environ["HO_TASK"]
+    seg = int(os.environ["HO_SEG"])
+    out_dir = os.environ["HO_OUT_DIR"]
+    out_name = os.environ["HO_OUT_NAME"]
+    out_path = os.path.join(out_dir, out_name)
+    diff_cap = int(os.environ["HO_DIFF_CAP"])
+    bytes_cap = int(os.environ["HO_BYTES_CAP"])
+
+    with open(os.environ["HO_STATUS_FILE"], encoding="utf-8", errors="replace") as fh:
+        status_text = fh.read()
+    with open(os.environ["HO_DIFF_FILE"], encoding="utf-8", errors="replace") as fh:
+        diff_text = fh.read()
+    with open(os.environ["HO_UNTRACKED_FILE"], "rb") as fh:
+        raw = fh.read()
+    untracked = [p.decode("utf-8", "replace") for p in raw.split(b"\x00") if p]
+
+    parts = [diff_text]
+    skipped_binary = []
+    for f in untracked:
+        if not os.path.isfile(f):
+            continue
+        if looks_binary(f):
+            skipped_binary.append(f)
+            parts.append(
+                "diff --git a/%s b/%s\nnew file\n"
+                "[BINARY FILE — содержимое пропущено (round 2 fix B): %s]\n" % (f, f, f)
+            )
+            continue
+        with open(f, encoding="utf-8", errors="replace") as fh:
+            content = fh.read()
+        parts.append(
+            "diff --git a/%s b/%s\nnew file\n--- /dev/null\n+++ b/%s\n%s\n" % (f, f, f, content)
+        )
+
+    diff_output = "".join(parts)
+
+    truncated = False
+    lines = diff_output.splitlines(keepends=True)
+    if len(lines) > diff_cap:
+        diff_output = "".join(lines[:diff_cap])
+        truncated = True
+
+    diff_output, byte_truncated = truncate_text_safely(diff_output, bytes_cap)
+    truncated = truncated or byte_truncated
+
+    body = [
+        "# Handoff pointer — task %s, segment: %d" % (task, seg),
+        "",
+        "Предыдущий агент этой задачи оборван потолком ходов. Ниже — что уже",
+        "сделано в рабочем дереве (НЕ переделывай это заново):",
+        "",
+        "## git status --short",
+        "```",
+        status_text.rstrip("\n"),
+        "```",
+        "",
+        "## git diff HEAD + untracked-файлы (потолок %d строк / %d байт)" % (diff_cap, bytes_cap),
+        "```diff",
+        diff_output.rstrip("\n"),
+    ]
+    if truncated:
+        body.append("[TRUNCATED — смотри полное состояние: git diff HEAD]")
+    body += [
+        "```",
+        "",
+        "## Untracked-файлы (созданы предыдущим сегментом)",
+        "```",
+        "\n".join(untracked),
+        "```",
+    ]
+    if skipped_binary:
+        body += [
+            "",
+            "## Похожие на бинарные — содержимое НЕ встроено (round 2 fix B)",
+            "```",
+            "\n".join(skipped_binary),
+            "```",
+        ]
+    body += [
+        "",
+        "Отчёт предыдущего сегмента, если он успел его писать: .mvp/reports/task-%s.md" % task,
+        "",
+    ]
+    content = "\n".join(body)
+
+    # Атомарная запись: NamedTemporaryFile в ТОЙ ЖЕ директории (гарантирует
+    # os.replace как переименование на одном разделе, не кросс-device
+    # copy) + os.replace. Наблюдатель никогда не увидит частично записанный
+    # .mvp/handoff-<task>.md.
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", dir=out_dir, prefix=".handoff-tmp-", suffix=".md",
+        delete=False, encoding="utf-8",
+    )
+    try:
+        tmp.write(content)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        tmp.close()
+        # Непустота итогового файла — defense-in-depth поверх атомарной
+        # записи (см. отчёт: content всегда непустой по построению, эта
+        # проверка ловит гипотетическую порчу самой записи, не логики
+        # сборки контента).
+        if os.path.getsize(tmp.name) == 0:
+            raise RuntimeError("written file is empty")
+        os.replace(tmp.name, out_path)
+    except BaseException:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+        raise
+
+    print(json.dumps({
+        "ok": True,
+        "path": out_path,
+        "segment": seg,
+    }))
+except Exception as e:
+    print(json.dumps({"ok": False, "error": "%s: %s" % (type(e).__name__, e)}))
+    sys.exit(1)
+PY
+)"
+build_rc=$?
+
+if [ "$build_rc" -ne 0 ]; then
+  reason="$(HO_ERRJSON="$BUILD_JSON" python3 -c '
+import json, os
+try:
+    d = json.loads(os.environ.get("HO_ERRJSON") or "")
+    msg = d.get("error")
+except Exception:
+    msg = None
+print(msg or "failed to write handoff file")
+')"
+  emit_result false "$reason" "check disk space and permissions for $out" ""
   exit 1
 fi
 
-# Успех: выводим путь и номер сегмента
-printf '{"ok":true,"reason":null,"hint":null,"data":{"path":"%s","segment":%s}}\n' "$out" "$SEG"
+DATA="$(HO_BUILD="$BUILD_JSON" python3 -c '
+import json, os
+d = json.loads(os.environ["HO_BUILD"])
+print(json.dumps({"path": d["path"], "segment": d["segment"]}))
+')"
+emit_result true "" "" "$DATA"
+exit 0
