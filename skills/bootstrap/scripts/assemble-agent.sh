@@ -22,10 +22,23 @@
 # relay), а не инженер проекта. Шаблон копируется в OUT_DIR как есть, шаги
 # 1-5 (и _common.md) для них пропускаются целиком.
 #
+# --capped <role>: эксперимент H1-cap-work-preservation (спека 2026-09-22
+# §9) — берёт уже СОБРАННЫЙ .claude/agents/<role>.md (не шаблон — значит
+# общий контракт _common.md в нём уже есть, verify-agents-drift.sh обязан
+# продолжать его видеть), заменяет/вставляет "maxTurns: 30" во фронтматтере
+# и "name:" на "<role>-capped", пишет .claude/agents/<role>-capped.md.
+# Файл живёт, пока гипотеза H1 открыта — закрытие гипотезы удаляет его
+# руками (см. experiments-handbook), поэтому record в plugin-lock.json НЕ
+# зовётся: это экспериментальный артефакт, а не производное плагина.
+# `plugin-lock.sh check` покажет его в derived_unstamped как foreign —
+# lib/gate.sh не блокирует build по чужому unstamped-файлу, чья роль не
+# диспатчится планом (см. коммент в lib/gate.sh про derived_unstamped_foreign).
+#
 # Использование:
 #   assemble-agent.sh backend-implementer nestjs
 #   assemble-agent.sh integration-specialist   # роли без стек-вариантов
 #   assemble-agent.sh mvp-relay                # роль механики пайплайна
+#   assemble-agent.sh --capped integration-specialist   # H1-эксперимент
 #
 # Переменные окружения:
 #   TEMPLATES_DIR  — путь к шаблонам (default: <plugin>/skills/bootstrap/templates)
@@ -62,6 +75,60 @@ fail() { # <reason> [hint]
   emit_result false "$1" "${2:-}" ""
   exit 1
 }
+
+# --capped <role> — ранняя ветка, до обычного парсинга ROLE/STACK: сама роль
+# приходит вторым аргументом, а не первым. Никакого record в plugin-lock —
+# это экспериментальный H1-артефакт, не производное плагина (см. коммент в
+# начале файла).
+if [ "${1:-}" = "--capped" ]; then
+  CAP_ROLE="${2:-}"
+  if [ -z "$CAP_ROLE" ]; then
+    fail "missing role" "usage: assemble-agent.sh --capped <role>"
+  fi
+  CAP_OUT_DIR="${OUT_DIR:-.claude/agents}"
+  CAP_SRC="$CAP_OUT_DIR/$CAP_ROLE.md"
+  CAP_DST="$CAP_OUT_DIR/$CAP_ROLE-capped.md"
+  if [ ! -f "$CAP_SRC" ]; then
+    fail "no assembled agent for role=$CAP_ROLE: $CAP_SRC" \
+      "run assemble-agent.sh $CAP_ROLE [stack] first — --capped copies an already-assembled file, it does not assemble from a template"
+  fi
+  CA_SRC="$CAP_SRC" CA_DST="$CAP_DST" CA_ROLE="$CAP_ROLE" python3 -c '
+import os, tempfile
+
+src, dst, role = os.environ["CA_SRC"], os.environ["CA_DST"], os.environ["CA_ROLE"]
+text = open(src, encoding="utf-8").read()
+lines = text.split("\n")
+
+# Фронтматтер — от первой строки "---" до следующей строки "---".
+if not lines or lines[0] != "---":
+    raise SystemExit("assembled agent has no frontmatter: %s" % src)
+end = next((i for i in range(1, len(lines)) if lines[i] == "---"), None)
+if end is None:
+    raise SystemExit("assembled agent frontmatter has no closing ---: %s" % src)
+
+found_max_turns = False
+for i in range(1, end):
+    if lines[i].startswith("name:"):
+        lines[i] = "name: %s-capped" % role
+    elif lines[i].startswith("maxTurns:"):
+        lines[i] = "maxTurns: 30"
+        found_max_turns = True
+if not found_max_turns:
+    lines.insert(end, "maxTurns: 30")
+
+out_dir = os.path.dirname(dst) or "."
+with tempfile.NamedTemporaryFile("w", dir=out_dir, delete=False, encoding="utf-8") as tmp:
+    tmp.write("\n".join(lines))
+    tmp_path = tmp.name
+os.replace(tmp_path, dst)
+'
+  if [ $? -ne 0 ]; then
+    fail "--capped: failed to build capped copy for role=$CAP_ROLE" "see python error above"
+  fi
+  CAP_DATA="$(python3 -c 'import json,sys; print(json.dumps({"out": sys.argv[1], "role": sys.argv[2]}))' "$CAP_DST" "$CAP_ROLE-capped")"
+  emit_result true "" "" "$CAP_DATA"
+  exit 0
+fi
 
 ROLE="${1:-}"
 if [ -z "$ROLE" ]; then

@@ -107,6 +107,8 @@ ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/assemble-agent.sh <role> [stack]
 ```
 Только роли из enum `role` в `skills/plan/references/plan-schema.json` — по ним `mvp:build` диспатчит агентов (`agentType`). Всегда: `backend-implementer <backend>`, `devops-engineer <deploy>.<backend>` (`<deploy>` из Stack), `test-writer <backend>`. Плюс `frontend-implementer <frontend>` при `frontend != none` и `integration-specialist`, если brief называет integration-сервисы. Ролей `validator`/`code-reviewer` нет — их гоняют инлайн-шаблоны `skills/build/agents/*.md`. `TEMPLATES_DIR`/`OUT_DIR` не трогай. Затем собери безусловные роли механики: `assemble-agent.sh mvp-reviewer`, `mvp-validator`, `mvp-relay` (без стека).
 
+В режиме experiments=greedy (дефолт при отсутствии ключа) после сборки ролей плана сделай capped-копии имплементерских ролей: `assemble-agent.sh --capped <role>`.
+
 Затем ОБЯЗАТЕЛЬНО:
 ```
 ${CLAUDE_PLUGIN_ROOT}/skills/bootstrap/scripts/verify-agents-drift.sh
@@ -159,7 +161,5 @@ ${CLAUDE_PLUGIN_ROOT}/lib/finalize.sh bootstrap <msg-file>
 Дождись подтверждения. Затем скажи оператору **дословно**:
 
 > Агенты зарегистрируются только в НОВОЙ сессии. Перед `mvp:build` перезапусти сессию, иначе задачи пойдут на `general-purpose` без контракта `_common.md`.
-
-Не совет: без перезапуска три задачи ушли на `general-purpose`, и ревью одобрило все три — оно судит дифф, не автора; `mvp:build` тогда халтит ценой первой задачи.
 
 **NEXT:** Use mvp:plan

@@ -117,4 +117,70 @@ rm -rf "$tmpdir_empty"
 [ "$vrc7" -eq 1 ] || { echo "FAIL: verify-agents-drift на пустом каталоге: exit ожидался 1, получен $vrc7" >&2; fail=1; }
 echo "$vout7" | grep -q '"ok": false' || { echo "FAIL: verify-agents-drift ok:false на пустом каталоге: $vout7" >&2; fail=1; }
 
+# (8) capped-копия: тот же файл + maxTurns: 30 во фронтматтере (Task 9,
+# спека H1-cap-work-preservation). Использует уже собранный на шаге (3)
+# integration-specialist.md.
+out="$(bash "$repo_root/skills/bootstrap/scripts/assemble-agent.sh" --capped integration-specialist | tail -n 1)"
+echo "$out" | grep -q '"ok": true' || { echo "FAIL: --capped: $out" >&2; fail=1; }
+[ -f .claude/agents/integration-specialist-capped.md ] || { echo "FAIL: capped-файл не создан" >&2; fail=1; }
+[ "$(fm_field .claude/agents/integration-specialist-capped.md maxTurns)" = "30" ] || { echo "FAIL: maxTurns" >&2; fail=1; }
+# name во фронтматтере должен стать <role>-capped — иначе харнесс зарегистрирует дубль имени
+grep -q "name: integration-specialist-capped" .claude/agents/integration-specialist-capped.md || { echo "FAIL: name не переименован" >&2; fail=1; }
+# тело (после фронтматтера) — идентично исходному, включая _common.md
+# (drift-инвариант обязан продолжать держаться и на capped-копии).
+diff <(awk 'NR==1&&$0=="---"{i++;next} i==1&&$0=="---"{i++;next} i>=2{print}' .claude/agents/integration-specialist.md) \
+     <(awk 'NR==1&&$0=="---"{i++;next} i==1&&$0=="---"{i++;next} i>=2{print}' .claude/agents/integration-specialist-capped.md) \
+  >/dev/null || { echo "FAIL: тело capped-копии разошлось с исходником" >&2; fail=1; }
+# capped-копия НЕ штампуется в lock — экспериментальный артефакт, не производный
+python3 -c "
+import json
+lock = json.load(open('.mvp/plugin-lock.json'))
+assert '.claude/agents/integration-specialist-capped.md' not in lock['derived'], 'capped-файл не должен попадать в lock[\"derived\"]'
+" || { echo "FAIL: capped-файл заштампован в lock" >&2; fail=1; }
+# (9) --capped без собранного исходника → ok:false с hint про порядок сборки
+rm -f .claude/agents/nope.md
+out="$(bash "$repo_root/skills/bootstrap/scripts/assemble-agent.sh" --capped nope | tail -n 1)" || true
+echo "$out" | grep -q '"ok": false' || { echo "FAIL: --capped без исходника должен падать" >&2; fail=1; }
+
+# (10) verify-agents-drift.sh: capped-копия имплементерской роли обязана
+# по-прежнему проходить byte-substring-инвариант (она сделана из уже
+# собранного файла — общий контракт в ней есть). Свежая фикстура: только
+# integration-specialist + его capped-копия, ничего больше не мешает счёту.
+tmpdir_capped="$(mktemp -d)"
+( cd "$tmpdir_capped" && git init -q . && mkdir -p .mvp && \
+  bash "$repo_root/skills/bootstrap/scripts/assemble-agent.sh" integration-specialist >/dev/null && \
+  bash "$repo_root/skills/bootstrap/scripts/assemble-agent.sh" --capped integration-specialist >/dev/null )
+vfull10="$(cd "$tmpdir_capped" && bash "$DRIFT_SH" 2>/dev/null)"
+vrc10=$?
+vout10="$(printf '%s\n' "$vfull10" | tail -n 1)"
+rm -rf "$tmpdir_capped"
+[ "$vrc10" -eq 0 ] || { echo "FAIL: verify-agents-drift на capped-копии: exit ожидался 0, получен $vrc10: $vout10" >&2; fail=1; }
+VD_OUT10="$vout10" python3 -c '
+import json, os
+d = json.loads(os.environ["VD_OUT10"])
+assert d["data"]["total"] == 2, "total != 2 (обе роли под инвариантом): %r" % d
+assert d["data"]["drift"] == 0, "drift != 0 на capped-копии: %r" % d
+' || { echo "FAIL: verify-agents-drift data на capped-копии" >&2; fail=1; }
+
+# (11) plugin-lock.sh check: незаштампованная capped-копия видна как
+# derived_unstamped (foreign), но НЕ блокирует — гейт (lib/gate.sh) не в
+# scope этого теста, здесь проверяем ровно то, что описано в notes H1:
+# check её лишь перечисляет, не превращает в missing/stale/tampered.
+tmpdir_check="$(mktemp -d)"
+( cd "$tmpdir_check" && git init -q . && mkdir -p .mvp && \
+  bash "$repo_root/skills/bootstrap/scripts/assemble-agent.sh" integration-specialist >/dev/null && \
+  PLUGIN_ROOT="$repo_root" bash "$repo_root/lib/plugin-lock.sh" seal >/dev/null && \
+  bash "$repo_root/skills/bootstrap/scripts/assemble-agent.sh" --capped integration-specialist >/dev/null )
+cfull="$(cd "$tmpdir_check" && PLUGIN_ROOT="$repo_root" bash "$repo_root/lib/plugin-lock.sh" check 2>/dev/null)"
+cout="$(printf '%s\n' "$cfull" | tail -n 1)"
+rm -rf "$tmpdir_check"
+CHECK_OUT="$cout" python3 -c '
+import json, os
+d = json.loads(os.environ["CHECK_OUT"])
+paths = [e["path"] for e in d["data"]["derived_unstamped"]]
+assert ".claude/agents/integration-specialist-capped.md" in paths, "capped-файл не виден в derived_unstamped: %r" % d
+assert d["data"]["derived_stale"] == [], "capped-файл не должен считаться stale: %r" % d
+assert d["data"]["derived_tampered"] == [], "capped-файл не должен считаться tampered: %r" % d
+' || { echo "FAIL: plugin-lock check на capped-копии" >&2; fail=1; }
+
 exit $fail
