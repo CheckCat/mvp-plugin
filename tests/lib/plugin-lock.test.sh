@@ -249,8 +249,7 @@ rc6=$?
 assert_eq "test 6: exit code" "1" "$rc6"
 # Проверка exit code одна НЕ ловит пропажу sys.exit(1): без него выполнение
 # проваливается дальше в 'for ... in lock.get(...)', где lock не определена —
-# NameError оттуда сам даёт процессу exit 1, маскируя пропавший sys.exit(1)
-# (см. .superpowers/sdd/2026-09-21-plugin-lock-and-sync/task-2-report.md).
+# NameError оттуда сам даёт процессу exit 1, маскируя пропавший sys.exit(1).
 # Ловим это не по пустоте stderr (это покраснело бы от любого постороннего
 # шума — DeprecationWarning, будущая диагностика и т.п.), а по признаку
 # именно неотловленного исключения: подстроке "Traceback" в stderr. Она
